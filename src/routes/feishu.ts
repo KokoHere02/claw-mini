@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { rateLimiter } from 'hono-rate-limiter';
 import {
   isFeishuUrlVerification,
   verifyWebhookToken,
@@ -6,8 +7,18 @@ import {
   isEventPayload,
 } from '@/services/feishu';
 import { handleMessage } from '@/services/handle-message';
+import logger from '@/utils/logger';
 
 const router = new Hono();
+
+// IP 级别限流：60 秒内最多 60 次请求
+router.use(rateLimiter({
+  windowMs: 60_000,
+  limit: 60,
+  standardHeaders: 'draft-6',
+  keyGenerator: (c) => c.req.header('x-forwarded-for') ?? c.req.header('x-real-ip') ?? 'unknown',
+  message: { code: 429, msg: 'Too many requests' },
+}));
 
 router.post('/webhook', async (c) => {
   let body: unknown;
@@ -37,7 +48,7 @@ router.post('/webhook', async (c) => {
   }
 
   // 异步处理，立即返回 200 避免飞书重试
-  handleMessage(body).catch(console.error);
+  handleMessage(body).catch((e) => logger.error({ err: e }, 'handleMessage error'));
   return c.json({ code: 0 });
 });
 

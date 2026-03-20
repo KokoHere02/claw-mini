@@ -12,7 +12,7 @@ const provider = createAnthropic({
 export async function generateAssistantReply(messages: ConversationMessage[]): Promise<string> {
   const result = await generateText({
     model: provider(config.model.id),
-    system: "你是 CLAW-MINI 一个之说中文的人工智能助手",
+    system: config.systemPrompt,
     messages: messages
   })
   return result.text.trim()
