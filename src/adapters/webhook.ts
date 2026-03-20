@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import feishuRouter from '@/routes/feishu';
 import { config } from '@/config';
 import type { Adapter } from './types';
+import logger from '@/utils/logger';
 
 export class WebhookAdapter implements Adapter {
   private server: ServerType | null = null;
@@ -18,7 +19,7 @@ export class WebhookAdapter implements Adapter {
       this.server = serve(
         { fetch: app.fetch, hostname: config.host, port: config.port },
         (info) => {
-          console.log(`[webhook] listening on http://${info.address}:${info.port}`);
+          logger.info(`[webhook] listening on http://${info.address}:${info.port}`);
           resolve();
         }
       );

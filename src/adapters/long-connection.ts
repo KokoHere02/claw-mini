@@ -4,6 +4,7 @@ import { config } from '@/config';
 import { isEventPayload } from '@/services/feishu';
 import { handleMessage } from '@/services/handle-message';
 import type { Adapter } from './types';
+import logger from '@/utils/logger';
 
 // ---- Protobuf schema ----
 const pbRoot = protobuf.Root.fromJSON({
@@ -168,7 +169,7 @@ export class LongConnectionAdapter implements Adapter {
       this.ws = new WebSocket(cfg.url);
 
       this.ws.on('open', () => {
-        console.log('[ws] connected');
+        logger.info('[ws] connected');
         this.startPing();
       });
 
@@ -179,7 +180,7 @@ export class LongConnectionAdapter implements Adapter {
       });
 
       this.ws.on('close', () => {
-        console.log('[ws] closed, reconnecting...');
+        logger.info('[ws] closed, reconnecting...');
         if (this.pingTimer) clearTimeout(this.pingTimer);
         this.scheduleReconnect();
       });

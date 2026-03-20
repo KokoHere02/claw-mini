@@ -162,7 +162,7 @@ export async function connect() {
 
     ws = new WebSocket(cfg.url);
     ws.on('open', () => {
-      console.log('[ws] connected');
+      logger.info('[ws] connected');
       startPing();
     });
 
@@ -173,7 +173,7 @@ export async function connect() {
     });
 
     ws.on('close', () => {
-      console.log('[ws] closed, reconnecting...');
+      logger.info('[ws] closed, reconnecting...');
       if (pingTimer) clearTimeout(pingTimer);
       scheduleReconnect();
     });
