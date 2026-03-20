@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:open.feishu.cn)",
+      "Bash(find /d/ts/claw-mini/node_modules/@larksuiteoapi -type f -name *.js)",
+      "Bash(grep -E \"^ws$|^protobufjs$\")",
+      "Bash(pnpm add:*)",
+      "Bash(npx tsc:*)",
+      "Bash(timeout 10 pnpm dev)"
+    ]
+  }
+}

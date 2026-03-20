@@ -9,6 +9,8 @@ type CachedToken = {
 
 let cachedToken: CachedToken | null = null;
 
+const FEISHU_API_BASE = 'https://open.feishu.cn/open-apis';
+
 async function feishuRequest<T>(
   path: string,
   init: RequestInit,
@@ -21,7 +23,7 @@ async function feishuRequest<T>(
     headers.set("authorization", `Bearer ${accessToken}`);
   }
 
-  const response = await fetch(`${config.feishu.apiBaseUrl}${path}`, {
+  const response = await fetch(`${FEISHU_API_BASE}${path}`, {
     ...init,
     headers
   });

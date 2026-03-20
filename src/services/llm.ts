@@ -8,10 +8,11 @@ const provider = createAnthropic({
   baseURL: config.model.baseURL,
 })
 
+
 export async function generateAssistantReply(messages: ConversationMessage[]): Promise<string> {
   const result = await generateText({
     model: provider(config.model.id),
-    system: config.systemPrompt,
+    system: "你是 CLAW-MINI 一个之说中文的人工智能助手",
     messages: messages
   })
   return result.text.trim()

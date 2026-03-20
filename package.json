@@ -17,10 +17,13 @@
     "@hono/node-server": "^1.19.11",
     "ai": "^6.0.116",
     "dotenv": "^17.3.1",
-    "hono": "^4.12.8"
+    "hono": "^4.12.8",
+    "protobufjs": "^8.0.0",
+    "ws": "^8.19.0"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
+    "@types/ws": "^8.18.1",
     "tsx": "^4.21.0"
   }
 }

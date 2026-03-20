@@ -4,6 +4,9 @@ dotenv.config({
   path: ".env.local"
 });
 
+type FeishuConnectionMode = "long-connection" | "webhook";
+type FeishuDomain = "feishu" | "lark";
+
 export type AppConfig = {
   host: string;
   port: number;
@@ -14,8 +17,9 @@ export type AppConfig = {
     appId: string;
     appSecret: string;
     verificationToken: string;
+    connectionMode: FeishuConnectionMode;
+    domain: FeishuDomain;
     encryptKey?: string;
-    apiBaseUrl: string;
   };
   model: {
     id: string;
@@ -50,6 +54,17 @@ function getOptionalEnv(name: string, fallback: string): string {
   return value || fallback;
 }
 
+function getEnumEnv<T extends string>(name: string, allowedValues: T[], defaultValue?: T): T {
+  const value = process.env[name]?.trim() as T | undefined;
+  if (value && allowedValues.includes(value)) {
+    return value;
+  }
+  if (defaultValue) {
+    return defaultValue;
+  }
+  throw new Error(`Environment variable ${name} must be one of: ${allowedValues.join(', ')}`);
+}
+
 export const config: AppConfig = {
   host: getStrEnv('HOST') || '0.0.0.0',
   port: getIntEnv('PORT', 3000),
@@ -61,7 +76,9 @@ export const config: AppConfig = {
     appSecret: getStrEnv('FEISHU_APP_SECRET'),
     verificationToken: getOptionalEnv('FEISHU_VERIFICATION_TOKEN',''),
     encryptKey: getOptionalEnv('FEISHU_ENCRYPT_KEY', ''),
-    apiBaseUrl: getOptionalEnv('FEISHU_API_BASE_URL', 'https://open.feishu.cn/open-apis'),
+    // apiBaseUrl: getOptionalEnv('FEISHU_API_BASE_URL', 'https://open.feishu.cn/open-apis'),
+    connectionMode: (getEnumEnv('FEISHU_CONNECTION_MODE', ['long-connection', 'webhook'] as const, 'webhook')),
+    domain: (getEnumEnv('FEISHU_DOMAIN', ['feishu', 'lark'] as const, 'feishu')),
   },
   model: {
     id: getStrEnv('MODEL_ID'),
