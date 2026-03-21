@@ -1,6 +1,5 @@
 import { MemoryService } from '@/services/memory';
 import { config } from '@/config';
-import { generateAssistantReply } from '@/services/llm';
 import {
   sendTextMessage,
   extractTextContent,
@@ -8,10 +7,11 @@ import {
 } from '@/services/feishu';
 import { FeishuEventPayload } from '@/types/feishu';
 import logger from '@/utils/logger';
+import { runAgent } from '@/agent';
 
 const memoryService = new MemoryService(config.sessionMaxTurns, config.eventDedupeTtlMs);
 
-// chat_id 级别限流：同一会话 5 秒内只处理 1 条
+// Per-chat rate limit: process at most one message every 5 seconds.
 const chatRateLimit = new Map<string, number>();
 setInterval(() => {
   const now = Date.now();
@@ -24,7 +24,6 @@ export async function handleMessage(body: FeishuEventPayload): Promise<void> {
   const { event, header } = body;
 
   if (header.event_type !== 'im.message.receive_v1') return;
-
   if (event.sender?.sender_type === 'app') return;
 
   const chatId = event.message.chat_id;
@@ -43,7 +42,7 @@ export async function handleMessage(body: FeishuEventPayload): Promise<void> {
   try {
     if (event.message?.message_type !== 'text') {
       logger.info({ chatId, messageType: event.message.message_type }, 'unsupported message type');
-      await sendTextMessage(chatId, '目前只支持文本形式的消息，敬请期待更多功能！');
+      await sendTextMessage(chatId, '目前只支持文本形式的消息。');
       memoryService.markEventDone(header.event_id);
       return;
     }
@@ -59,7 +58,7 @@ export async function handleMessage(body: FeishuEventPayload): Promise<void> {
     if (isResetCommand(content)) {
       memoryService.resetConversation(chatId);
       logger.info({ chatId }, 'conversation reset');
-      await sendTextMessage(chatId, '已经重置会话历史了哦！');
+      await sendTextMessage(chatId, '已经重置会话历史了。');
       memoryService.markEventDone(header.event_id);
       return;
     }
@@ -69,7 +68,7 @@ export async function handleMessage(body: FeishuEventPayload): Promise<void> {
       { role: 'user' as const, content },
     ];
 
-    const reply = (await generateAssistantReply(conversation)) || '我暂时没组织好回答，你可以再试一次。';
+    const reply = (await runAgent(conversation)) || '我暂时没组织好回答，你可以再试一次。';
 
     memoryService.appendExchange(chatId, content, reply);
     await sendTextMessage(chatId, reply);
@@ -78,6 +77,6 @@ export async function handleMessage(body: FeishuEventPayload): Promise<void> {
   } catch (error) {
     memoryService.markEventFailed(header.event_id);
     logger.error({ err: error, chatId, eventId: header.event_id }, 'error handling message');
-    await sendTextMessage(chatId, '服务暂时异常，我已经记录了问题。').catch(() => {});
+    await sendTextMessage(chatId, '服务暂时异常，我已经记录问题。').catch(() => {});
   }
 }

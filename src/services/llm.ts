@@ -1,19 +1,27 @@
-import { createAnthropic } from "@ai-sdk/anthropic";
-import { generateText } from "ai";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
+import { streamText } from "ai";
 import { config } from "@/config"
-import { ConversationMessage } from "./memory"
+import { ConversationMessage } from "@/services/memory"
+import logger from "@/utils/logger";
 
-const provider = createAnthropic({
+const provider = createOpenAICompatible({
+  name: config.model.id,
   apiKey: config.model.apiKey,
   baseURL: config.model.baseURL,
 })
 
 
 export async function generateAssistantReply(messages: ConversationMessage[]): Promise<string> {
-  const result = await generateText({
+  const result = streamText({
     model: provider(config.model.id),
     system: config.systemPrompt,
     messages: messages
   })
-  return result.text.trim()
+  
+
+  let text = ''
+  for await (const chunk of result.textStream) {
+    text += chunk
+  }
+  return text.trim()
 }

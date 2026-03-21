@@ -1,4 +1,6 @@
 import dotenv from 'dotenv';
+import fs from 'node:fs';
+import path from 'node:path';
 
 dotenv.config({
   path: ".env.local"
@@ -13,6 +15,11 @@ export type AppConfig = {
   systemPrompt: string;
   sessionMaxTurns: number;
   eventDedupeTtlMs: number;
+  agent: {
+    maxSteps: number;
+    plannerPrompt?: string;
+    plannerPromptFile?: string;
+  };
   feishu: {
     appId: string;
     appSecret: string;
@@ -54,6 +61,30 @@ function getOptionalEnv(name: string, fallback: string): string {
   return value || fallback;
 }
 
+function getOptionalFileContent(name: string): { file?: string; content?: string } {
+  const rawPath = process.env[name]?.trim();
+  if (!rawPath) return {};
+
+  const resolvedPath = path.isAbsolute(rawPath) ? rawPath : path.resolve(process.cwd(), rawPath);
+  const content = fs.readFileSync(resolvedPath, 'utf8').trim();
+  return { file: resolvedPath, content: content || undefined };
+}
+
+function getFileContentOrThrow(filePath: string): { file: string; content: string } {
+  const resolvedPath = path.isAbsolute(filePath) ? filePath : path.resolve(process.cwd(), filePath);
+  const content = fs.readFileSync(resolvedPath, 'utf8').trim();
+  if (!content) {
+    throw new Error(`File is empty: ${resolvedPath}`);
+  }
+
+  return { file: resolvedPath, content };
+}
+
+const defaultAgentPlannerPromptFile = getFileContentOrThrow('prompts/agent-planner.default.txt');
+const agentPlannerPromptOverride = getOptionalFileContent('AGENT_PLANNER_PROMPT_FILE');
+const defaultSystemPromptFile = getFileContentOrThrow('prompts/system.default.txt');
+const systemPromptOverride = getOptionalFileContent('SYSTEM_PROMPT_FILE');
+
 function getEnumEnv<T extends string>(name: string, allowedValues: T[], defaultValue?: T): T {
   const value = process.env[name]?.trim() as T | undefined;
   if (value && allowedValues.includes(value)) {
@@ -68,9 +99,20 @@ function getEnumEnv<T extends string>(name: string, allowedValues: T[], defaultV
 export const config: AppConfig = {
   host: getStrEnv('HOST') || '0.0.0.0',
   port: getIntEnv('PORT', 3000),
-  systemPrompt: getStrEnv('SYSTEM_PROMPT'),
+  systemPrompt:
+    systemPromptOverride.content
+    ?? (process.env.SYSTEM_PROMPT?.trim() || undefined)
+    ?? defaultSystemPromptFile.content,
   sessionMaxTurns: getIntEnv('SESSION_MAX_TURNS', 20),
   eventDedupeTtlMs: getIntEnv('EXPIRATION_TIME', 10 * 60 * 1000),
+  agent: {
+    maxSteps: getIntEnv('AGENT_MAX_STEPS', 6),
+    plannerPromptFile: agentPlannerPromptOverride.file ?? defaultAgentPlannerPromptFile.file,
+    plannerPrompt:
+      agentPlannerPromptOverride.content
+      ?? (process.env.AGENT_PLANNER_PROMPT?.trim() || undefined)
+      ?? defaultAgentPlannerPromptFile.content,
+  },
   feishu: {
     appId: getStrEnv('FEISHU_APP_ID'),
     appSecret: getStrEnv('FEISHU_APP_SECRET'),

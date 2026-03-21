@@ -1,0 +1,10 @@
+﻿Return JSON only, with no extra prose.
+Choose exactly one of these formats:
+{"action":"respond","answer":"..."}
+{"action":"call_tool","tool":"tool_name","arguments":{"key":"value"}}
+
+Call a tool when it can improve correctness.
+If previous tool results are insufficient, you may call another tool.
+If the answer is already available from previous tool results, respond directly.
+Do not invent unavailable tools.
+Prefer direct response when enough information is already present.

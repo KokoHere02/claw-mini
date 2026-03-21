@@ -1,7 +1,6 @@
-export type ConversationMessage = {
-  role: 'user' | 'assistant';
-  content: string;
-}
+import type { ModelMessage } from 'ai';
+
+export type ConversationMessage = ModelMessage;
 
 type EventState = {
   status: "processing" | "done";
