@@ -75,6 +75,16 @@ export function isResetCommand(content: string): boolean {
   return content.trim() === "/reset" || content.trim() === "重置会话";
 }
 
+export function isSummaryDebugCommand(content: string): boolean {
+  const value = content.trim().toLowerCase();
+  return value === '#summary' || value === '/summary';
+}
+
+export function isMemoryDebugCommand(content: string): boolean {
+  const value = content.trim().toLowerCase();
+  return value === '#memory' || value === '/memory';
+}
+
 export async function sendTextMessage(
   chatId: string,
   text: string,

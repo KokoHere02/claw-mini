@@ -3,13 +3,22 @@ import { config } from '@/config';
 import {
   sendTextMessage,
   extractTextContent,
+  isMemoryDebugCommand,
   isResetCommand,
+  isSummaryDebugCommand,
 } from '@/services/feishu';
 import { FeishuEventPayload } from '@/types/feishu';
 import logger from '@/utils/logger';
 import { runAgent } from '@/agent';
+import { buildSummaryContextMessage } from '@/agent/dynamic-prompt';
+import { maybeSummarizeSession } from './memory-summarizer';
+import { FileMemoryRepository } from './file-memory-repository';
 
-const memoryService = new MemoryService(config.sessionMaxTurns, config.eventDedupeTtlMs);
+const memoryService = new MemoryService(
+  config.sessionMaxTurns,
+  config.eventDedupeTtlMs,
+  new FileMemoryRepository(),
+);
 
 // Per-chat rate limit: process at most one message every 5 seconds.
 const chatRateLimit = new Map<string, number>();
@@ -19,6 +28,20 @@ setInterval(() => {
     if (now - ts > 5_000) chatRateLimit.delete(id);
   }
 }, 10_000);
+
+function formatSummaryDebugText(summary: string): string {
+  return summary.trim() ? `current summary:\n${summary}` : 'current summary is empty.';
+}
+
+function formatMemoryDebugText(chatId: string): string {
+  const session = memoryService.getSession(chatId);
+  return [
+    `summary_length: ${session.summary.length}`,
+    `recent_message_count: ${session.recentMessages.length}`,
+    '',
+    session.summary.trim() ? `summary:\n${session.summary}` : 'summary:\n(empty)',
+  ].join('\n');
+}
 
 export async function handleMessage(body: FeishuEventPayload): Promise<void> {
   const { event, header } = body;
@@ -63,7 +86,22 @@ export async function handleMessage(body: FeishuEventPayload): Promise<void> {
       return;
     }
 
+    if (isSummaryDebugCommand(content)) {
+      await sendTextMessage(chatId, formatSummaryDebugText(memoryService.getSummary(chatId)));
+      memoryService.markEventDone(header.event_id);
+      return;
+    }
+
+    if (isMemoryDebugCommand(content)) {
+      await sendTextMessage(chatId, formatMemoryDebugText(chatId));
+      memoryService.markEventDone(header.event_id);
+      return;
+    }
+
+    const summary = memoryService.getSummary(chatId);
+    const summaryMessage = buildSummaryContextMessage(summary);
     const conversation = [
+      ...(summaryMessage ? [summaryMessage] : []),
       ...memoryService.getConversation(chatId),
       { role: 'user' as const, content },
     ];
@@ -71,6 +109,30 @@ export async function handleMessage(body: FeishuEventPayload): Promise<void> {
     const reply = (await runAgent(conversation)) || '我暂时没组织好回答，你可以再试一次。';
 
     memoryService.appendExchange(chatId, content, reply);
+    try {
+      const session = memoryService.getSession(chatId);
+      const summarizeResult = await maybeSummarizeSession({
+        currentSummary: session.summary,
+        recentMessages: session.recentMessages,
+      });
+
+      if (summarizeResult) {
+        memoryService.updateSummary(chatId, summarizeResult.summary);
+        memoryService.replaceRecentMessages(chatId, summarizeResult.recentMessages);
+        logger.info(
+          {
+            chatId,
+            summaryLength: summarizeResult.summary.length,
+            summaryPreview: summarizeResult.summary.slice(0, 200),
+            remainingRecentMessages: summarizeResult.recentMessages.length,
+          },
+          'conversation summary refreshed',
+        );
+      }
+    } catch (error) {
+      logger.warn({ err: error, chatId }, 'failed to refresh conversation summary');
+    }
+
     await sendTextMessage(chatId, reply);
     logger.info({ chatId, eventId: header.event_id }, 'reply sent');
     memoryService.markEventDone(header.event_id);

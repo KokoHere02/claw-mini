@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 dotenv.config({
@@ -15,6 +16,14 @@ export type AppConfig = {
   systemPrompt: string;
   sessionMaxTurns: number;
   eventDedupeTtlMs: number;
+  memory: {
+    summaryTriggerMessageCount: number;
+    summaryKeepRecentMessageCount: number;
+    summaryPrompt?: string;
+    summaryPromptFile?: string;
+    storageDir: string;
+    ttlDays: number;
+  };
   agent: {
     maxSteps: number;
     plannerPrompt?: string;
@@ -44,7 +53,13 @@ function getStrEnv(name: string): string {
 }
 
 function getIntEnv(name: string, defaultValue?: number): number {
-  const value = getStrEnv(name);
+  const value = process.env[name]?.trim();
+  if (!value) {
+    if (defaultValue !== undefined) {
+      return defaultValue;
+    }
+    throw new Error(`Environment variable not found: ${name}`);
+  }
   const intValue = parseInt(value, 10);
   if (isNaN(intValue)) {
     if (defaultValue !== undefined) {
@@ -84,6 +99,8 @@ const defaultAgentPlannerPromptFile = getFileContentOrThrow('prompts/agent-plann
 const agentPlannerPromptOverride = getOptionalFileContent('AGENT_PLANNER_PROMPT_FILE');
 const defaultSystemPromptFile = getFileContentOrThrow('prompts/system.default.txt');
 const systemPromptOverride = getOptionalFileContent('SYSTEM_PROMPT_FILE');
+const defaultMemorySummaryPromptFile = getFileContentOrThrow('prompts/memory-summary.default.txt');
+const memorySummaryPromptOverride = getOptionalFileContent('MEMORY_SUMMARY_PROMPT_FILE');
 
 function getEnumEnv<T extends string>(name: string, allowedValues: T[], defaultValue?: T): T {
   const value = process.env[name]?.trim() as T | undefined;
@@ -105,6 +122,17 @@ export const config: AppConfig = {
     ?? defaultSystemPromptFile.content,
   sessionMaxTurns: getIntEnv('SESSION_MAX_TURNS', 20),
   eventDedupeTtlMs: getIntEnv('EXPIRATION_TIME', 10 * 60 * 1000),
+  memory: {
+    summaryTriggerMessageCount: getIntEnv('MEMORY_SUMMARY_TRIGGER_MESSAGE_COUNT', 10),
+    summaryKeepRecentMessageCount: getIntEnv('MEMORY_SUMMARY_KEEP_RECENT_MESSAGE_COUNT', 6),
+    summaryPromptFile: memorySummaryPromptOverride.file ?? defaultMemorySummaryPromptFile.file,
+    summaryPrompt:
+      memorySummaryPromptOverride.content
+      ?? (process.env.MEMORY_SUMMARY_PROMPT?.trim() || undefined)
+      ?? defaultMemorySummaryPromptFile.content,
+    storageDir: getOptionalEnv('MEMORY_STORAGE_DIR', path.join(os.homedir(), '.claw-mini', 'memory')),
+    ttlDays: getIntEnv('MEMORY_TTL_DAYS', 30),
+  },
   agent: {
     maxSteps: getIntEnv('AGENT_MAX_STEPS', 6),
     plannerPromptFile: agentPlannerPromptOverride.file ?? defaultAgentPlannerPromptFile.file,
@@ -118,7 +146,6 @@ export const config: AppConfig = {
     appSecret: getStrEnv('FEISHU_APP_SECRET'),
     verificationToken: getOptionalEnv('FEISHU_VERIFICATION_TOKEN',''),
     encryptKey: getOptionalEnv('FEISHU_ENCRYPT_KEY', ''),
-    // apiBaseUrl: getOptionalEnv('FEISHU_API_BASE_URL', 'https://open.feishu.cn/open-apis'),
     connectionMode: (getEnumEnv('FEISHU_CONNECTION_MODE', ['long-connection', 'webhook'] as const, 'webhook')),
     domain: (getEnumEnv('FEISHU_DOMAIN', ['feishu', 'lark'] as const, 'feishu')),
   },
