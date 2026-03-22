@@ -3,6 +3,7 @@ import type { ToolDefinition } from '../tool-types';
 export const getCurrentTimeTool: ToolDefinition = {
   name: 'get_current_time',
   description: 'Returns the current server time and an ISO timestamp.',
+  directReturn: true,
   parameters: {
     timeZone: {
       type: 'string',
@@ -25,6 +26,9 @@ export const getCurrentTimeTool: ToolDefinition = {
       iso: now.toISOString(),
       formatted,
       timeZone: requestedZone ?? 'server-default',
+      displayText: requestedZone
+        ? `当前时间（${requestedZone}）: ${formatted}`
+        : `当前时间: ${formatted}`,
     };
   },
 };

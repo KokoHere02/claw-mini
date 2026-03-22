@@ -14,6 +14,7 @@ export type ToolDefinition = {
   parameters: ToolParameters;
   execute: (params: Record<string, unknown>) => Promise<unknown>;
   timeoutMs?: number;
+  directReturn?: boolean;
 };
 
 export type ToolSummary = {

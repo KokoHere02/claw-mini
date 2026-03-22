@@ -88,13 +88,15 @@ export const httpRequestTool: ToolDefinition = {
 
     const body = await response.text();
     const contentType = response.headers.get('content-type') ?? '';
+    const truncatedBody = truncate(body, MAX_RESPONSE_CHARS);
 
     return {
       url: safeUrl.toString(),
       status: response.status,
       ok: response.ok,
       contentType,
-      body: truncate(body, MAX_RESPONSE_CHARS),
+      body: truncatedBody,
+      displayText: `已请求 ${safeUrl.toString()}，状态码 ${response.status}。\n${truncatedBody}`,
     };
   },
 };

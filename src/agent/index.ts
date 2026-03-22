@@ -1,8 +1,9 @@
-﻿import { streamText, type ModelMessage } from 'ai';
+import { generateObject, generateText, Output, stepCountIs, streamText, type ModelMessage } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import { z } from 'zod';
 import { config } from '@/config';
 import { registry } from './tool-registry';
-import type { ToolParameters } from './tool-types';
+import type { ToolDefinition, ToolParameters } from './tool-types';
 import { runner } from './tool-runner';
 import logger from '@/utils/logger';
 import { buildAnswerPrompt, buildPlannerPrompt, buildRecoveryPrompt } from './prompt-builder';
@@ -79,23 +80,6 @@ function normalizeDecision(raw: unknown): AgentDecision | null {
   return null;
 }
 
-function extractQuotedTarget(text: string): string | null {
-  const patterns = [
-    /["'`](.+?)["'`]/,
-    /read\s+([^\s]+)/i,
-    /show\s+([^\s]+)/i,
-    /fetch\s+(https?:\/\/[^\s]+)/i,
-    /visit\s+(https?:\/\/[^\s]+)/i,
-  ];
-
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (match?.[1]?.trim()) return match[1].trim();
-  }
-
-  return null;
-}
-
 function getMessageText(message: ModelMessage): string {
   if (typeof message.content === 'string') return message.content;
 
@@ -124,123 +108,74 @@ function hasPostUserAgentContext(messages: ModelMessage[]): boolean {
   });
 }
 
-function shouldReturnDirectToolAnswer(messages: ModelMessage[], toolName: string): boolean {
+function shouldReturnDirectToolAnswer(messages: ModelMessage[], tool: ToolDefinition): boolean {
   const lastUserIndex = findLastUserMessageIndex(messages);
   if (lastUserIndex < 0) return false;
 
   const text = getMessageText(messages[lastUserIndex]).trim();
   if (!text) return false;
 
-  // Multi-step tasks should stay in the loop.
   if (/(先|然后|再|接着|并且|总结|分析|判断|告诉我|说明|为什么|是否|有没有)/.test(text)) {
     return false;
   }
 
-  if (toolName === 'get_current_time') {
-    return /(现在几点|当前时间|几点了|什么时间|time now|current time)/i.test(text);
-  }
-
-  if (toolName === 'calculate_expression') {
-    return /(计算|算一下|evaluate|calculate)/i.test(text);
-  }
-
-  if (toolName === 'http_request') {
-    return /(请求|访问|抓取|获取网页|fetch|http|url)/i.test(text);
-  }
-
-  if (toolName === 'run_command') {
-    return /(列出文件|当前目录|读取文件|查看文件|whoami|hostname|node 版本|pnpm 版本|pwd|ls|cat)/i.test(text);
-  }
-
-  return false;
+  return tool.directReturn === true;
 }
 
-function inferToolDecision(messages: ModelMessage[]): AgentDecision | null {
+async function inferToolDecision(messages: ModelMessage[]): Promise<AgentDecision | null> {
   const lastUserMessage = [...messages].reverse().find((message) => message.role === 'user');
   if (!lastUserMessage) return null;
 
   const text = getMessageText(lastUserMessage).trim();
   if (!text) return null;
 
-  if (/(现在几点|当前时间|几点了|什么时间|time now|current time)/i.test(text)) {
-    const zoneMatch = text.match(/(Asia\/Shanghai|America\/New_York|UTC|Europe\/[A-Za-z_]+|Asia\/[A-Za-z_]+)/i);
+  try {
+    const { object } = await generateObject({
+      model: provider(config.model.id),
+      system: [
+        'You are a lightweight tool selector.',
+        'Decide whether the latest user message should immediately call one available tool.',
+        'If you are not confident, return no_tool.',
+        'Only choose from the available tools.',
+        'For calculate_expression, provide the expression argument.',
+        'For http_request, provide the url argument.',
+        'For run_command, provide a single safe read-only PowerShell command string in the command argument.',
+        'Do not use command chaining, redirection, pipes, networking, or write operations.',
+        'For get_current_time, provide timeZone only when explicitly requested.',
+      ].join('\n'),
+      prompt: [
+        '[latest_user_message]',
+        text,
+        '',
+        '[available_tools]',
+        JSON.stringify(registry.summary()),
+      ].join('\n'),
+      schema: z.object({
+        decision: z.enum([
+          'no_tool',
+          'get_current_time',
+          'calculate_expression',
+          'http_request',
+          'run_command',
+        ]),
+        arguments: z.record(z.string(), z.unknown()).optional(),
+      }),
+    });
+
+    if (object.decision === 'no_tool') return null;
+
     return {
       action: 'call_tool',
-      tool: 'get_current_time',
-      arguments: zoneMatch ? { timeZone: zoneMatch[1] } : {},
+      tool: object.decision,
+      arguments:
+        object.arguments && typeof object.arguments === 'object' && !Array.isArray(object.arguments)
+          ? (object.arguments as Record<string, unknown>)
+          : {},
     };
+  } catch (error) {
+    logger.warn({ err: error }, '[agent] ai tool inference failed');
+    return null;
   }
-
-  if (/(计算|算一下|表达式|evaluate|calculate)/i.test(text)) {
-    const expressionMatch =
-      text.match(/`([^`]+)`/) ??
-      text.match(/\(([^()]+)\)/) ??
-      text.match(/[-+*/().\d\s]{3,}/);
-
-    if (expressionMatch?.[0]) {
-      const expression = expressionMatch[1] ?? expressionMatch[0];
-      return {
-        action: 'call_tool',
-        tool: 'calculate_expression',
-        arguments: { expression: expression.trim() },
-      };
-    }
-  }
-
-  if (/(请求|访问|抓取|获取网页|fetch|http|url)/i.test(text) && /https?:\/\//i.test(text)) {
-    const target = extractQuotedTarget(text) ?? text.match(/https?:\/\/[^\s]+/)?.[0];
-    if (target) {
-      return {
-        action: 'call_tool',
-        tool: 'http_request',
-        arguments: { url: target },
-      };
-    }
-  }
-
-  if (/(执行命令|运行命令|列出文件|当前目录|读取文件|查看文件|whoami|hostname|node 版本|pnpm 版本|pwd|ls|cat)/i.test(text)) {
-    if (/(当前目录|pwd)/i.test(text)) {
-      return { action: 'call_tool', tool: 'run_command', arguments: { command: 'pwd' } };
-    }
-
-    if (/(列出文件|看看目录|ls)/i.test(text)) {
-      const target = extractQuotedTarget(text) ?? undefined;
-      return {
-        action: 'call_tool',
-        tool: 'run_command',
-        arguments: target ? { command: 'ls', target } : { command: 'ls' },
-      };
-    }
-
-    if (/(读取文件|查看文件|cat)/i.test(text)) {
-      const target = extractQuotedTarget(text);
-      if (target) {
-        return {
-          action: 'call_tool',
-          tool: 'run_command',
-          arguments: { command: 'cat', target },
-        };
-      }
-    }
-
-    if (/whoami/i.test(text)) {
-      return { action: 'call_tool', tool: 'run_command', arguments: { command: 'whoami' } };
-    }
-
-    if (/hostname/i.test(text)) {
-      return { action: 'call_tool', tool: 'run_command', arguments: { command: 'hostname' } };
-    }
-
-    if (/(node 版本|node_version)/i.test(text)) {
-      return { action: 'call_tool', tool: 'run_command', arguments: { command: 'node_version' } };
-    }
-
-    if (/(pnpm 版本|pnpm_version)/i.test(text)) {
-      return { action: 'call_tool', tool: 'run_command', arguments: { command: 'pnpm_version' } };
-    }
-  }
-
-  return null;
 }
 
 async function collectText(messages: ModelMessage[], system: string): Promise<string> {
@@ -248,7 +183,7 @@ async function collectText(messages: ModelMessage[], system: string): Promise<st
     model: provider(config.model.id),
     system,
     messages,
-    maxSteps: 1,
+    stopWhen: stepCountIs(1),
   });
 
   let text = '';
@@ -272,9 +207,9 @@ function getPromptContext(step: number, messages: ModelMessage[]) {
 
 async function planNextStep(step: number, messages: ModelMessage[]): Promise<AgentDecision | null> {
   if (!hasPostUserAgentContext(messages)) {
-    const inferred = inferToolDecision(messages);
+    const inferred = await inferToolDecision(messages);
     if (inferred) {
-      logger.info({ decision: inferred }, '[agent] rule-based tool selection');
+      logger.info({ decision: inferred }, '[agent] ai tool selection');
       return inferred;
     }
   }
@@ -320,62 +255,10 @@ function makeToolErrorMessage(toolName: string, error: unknown): ModelMessage {
   };
 }
 
-function formatToolAnswer(toolName: string, result: unknown): string | null {
+function getToolDisplayText(result: unknown): string | null {
   if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
   const value = result as Record<string, unknown>;
-
-  if (toolName === 'get_current_time') {
-    const formatted = typeof value.formatted === 'string' ? value.formatted : null;
-    const timeZone = typeof value.timeZone === 'string' ? value.timeZone : null;
-    if (formatted) {
-      return timeZone ? `当前时间（${timeZone}）: ${formatted}` : `当前时间: ${formatted}`;
-    }
-  }
-
-  if (toolName === 'calculate_expression') {
-    const expression = typeof value.expression === 'string' ? value.expression : null;
-    const resultValue = value.result;
-    if (expression && resultValue != null) {
-      return `${expression} = ${String(resultValue)}`;
-    }
-  }
-
-  if (toolName === 'run_command') {
-    const command = typeof value.command === 'string' ? value.command : null;
-    const stdout = typeof value.stdout === 'string' ? value.stdout : '';
-    const stderr = typeof value.stderr === 'string' ? value.stderr : '';
-    const exitCode = typeof value.exitCode === 'number' ? value.exitCode : null;
-    const target = typeof value.target === 'string' ? value.target : null;
-
-    if (exitCode !== 0) {
-      return stderr || `命令 ${command ?? ''} 执行失败，退出码 ${String(exitCode)}。`;
-    }
-
-    if (command === 'pwd') {
-      return stdout ? `当前目录:\n${stdout}` : '当前目录为空。';
-    }
-
-    if (command === 'ls') {
-      return stdout ? `目录内容:\n${stdout}` : '目录为空。';
-    }
-
-    if (command === 'cat') {
-      return stdout ? `文件${target ? ` ${target}` : ''}内容:\n${stdout}` : `文件${target ? ` ${target}` : ''}为空。`;
-    }
-
-    if (stdout) return stdout;
-  }
-
-  if (toolName === 'http_request') {
-    const status = typeof value.status === 'number' ? value.status : null;
-    const body = typeof value.body === 'string' ? value.body : null;
-    const url = typeof value.url === 'string' ? value.url : null;
-    if (status != null && body != null) {
-      return `已请求 ${url ?? '目标地址'}，状态码 ${status}。\n${body}`;
-    }
-  }
-
-  return null;
+  return typeof value.displayText === 'string' && value.displayText.trim() ? value.displayText : null;
 }
 
 export async function runAgent(messages: ModelMessage[]): Promise<string> {
@@ -428,8 +311,8 @@ export async function runAgent(messages: ModelMessage[]): Promise<string> {
 
     try {
       const toolResult = await runner.run(toolDefinition, toolArgs);
-      const directAnswer = formatToolAnswer(toolDefinition.name, toolResult);
-      if (directAnswer && shouldReturnDirectToolAnswer(workingMessages, toolDefinition.name)) {
+      const directAnswer = getToolDisplayText(toolResult);
+      if (directAnswer && shouldReturnDirectToolAnswer(workingMessages, toolDefinition)) {
         logger.info({ step, tool: toolDefinition.name, text: directAnswer }, '[agent] execution finished with direct tool answer');
         return directAnswer;
       }
@@ -478,4 +361,3 @@ export async function runAgent(messages: ModelMessage[]): Promise<string> {
     return '工具已经执行，但模型服务返回了非预期结果，最终答案暂时无法生成。';
   }
 }
-

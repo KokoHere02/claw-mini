@@ -158,6 +158,7 @@ function evaluateExpression(expression: string): number {
 export const calculateExpressionTool: ToolDefinition = {
   name: 'calculate_expression',
   description: 'Evaluates arithmetic expressions with numbers, parentheses, and + - * / operators.',
+  directReturn: true,
   parameters: {
     expression: {
       type: 'string',
@@ -167,10 +168,12 @@ export const calculateExpressionTool: ToolDefinition = {
   execute: async ({ expression }) => {
     const input = String(expression ?? '').trim();
     if (!input) throw new Error('Expression must not be empty');
+    const result = evaluateExpression(input);
 
     return {
       expression: input,
-      result: evaluateExpression(input),
+      result,
+      displayText: `${input} = ${String(result)}`,
     };
   },
 };
