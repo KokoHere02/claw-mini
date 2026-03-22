@@ -3,57 +3,64 @@ import type { ToolDefinition } from '../tool-types';
 
 const MAX_OUTPUT_CHARS = 4000;
 
-type AllowedCommand = {
-  args: (target?: string) => string[];
-  requiresTarget?: boolean;
-};
+const DISALLOWED_PATTERNS: RegExp[] = [
+  /[|;&><]/,
+  /\b(?:rm|del|erase|move|mv|copy|cp|rename|ren)\b/i,
+  /\b(?:set-content|add-content|out-file|sc|ac|ni|new-item|remove-item|ri)\b/i,
+  /\b(?:invoke-webrequest|curl|wget|start-process|powershell|pwsh|cmd)\b/i,
+  /\b(?:git\s+reset|git\s+checkout|git\s+clean|git\s+restore)\b/i,
+];
 
-const ALLOWED_COMMANDS: Record<string, AllowedCommand> = {
-  pwd: {
-    args: () => ['-NoProfile', '-Command', 'Get-Location | Select-Object -ExpandProperty Path'],
-  },
-  ls: {
-    args: (target) => [
-      '-NoProfile',
-      '-Command',
-      target
-        ? `Get-ChildItem -Force -Name -- '${target.replace(/'/g, "''")}'`
-        : 'Get-ChildItem -Force -Name',
-    ],
-  },
-  cat: {
-    args: (target) => [
-      '-NoProfile',
-      '-Command',
-      `Get-Content -- '${(target ?? '').replace(/'/g, "''")}'`,
-    ],
-    requiresTarget: true,
-  },
-  whoami: {
-    args: () => ['-NoProfile', '-Command', 'whoami'],
-  },
-  hostname: {
-    args: () => ['-NoProfile', '-Command', 'hostname'],
-  },
-  node_version: {
-    args: () => ['-NoProfile', '-Command', 'node -v'],
-  },
-  pnpm_version: {
-    args: () => ['-NoProfile', '-Command', 'pnpm.cmd -v'],
-  },
-};
+const ALLOWED_PREFIXES = [
+  'Get-Location',
+  'Get-ChildItem',
+  'Get-Content',
+  'whoami',
+  'hostname',
+  'node -v',
+  'pnpm.cmd -v',
+  'git status',
+  'git diff --stat',
+  'npm',
+];
 
 function truncate(text: string, limit: number): string {
   if (text.length <= limit) return text;
   return `${text.slice(0, limit)}\n...[truncated ${text.length - limit} chars]`;
 }
 
-function runPowershell(args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
+function isAllowedPrefix(command: string): boolean {
+  return ALLOWED_PREFIXES.some((prefix) => command.startsWith(prefix));
+}
+
+function assertSafeCommand(rawCommand: string): string {
+  const command = rawCommand.trim();
+  if (!command) throw new Error('Command must not be empty');
+
+  for (const pattern of DISALLOWED_PATTERNS) {
+    if (pattern.test(command)) {
+      throw new Error(`Command is not allowed: "${command}"`);
+    }
+  }
+
+  if (!isAllowedPrefix(command)) {
+    throw new Error(`Command prefix is not allowed: "${command}"`);
+  }
+
+  return command;
+}
+
+function runPowershell(command: string): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
   return new Promise((resolve, reject) => {
-    const child = spawn('powershell.exe', args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-    });
+    const child = spawn(
+      'powershell.exe',
+      ['-NoProfile', '-Command', command],
+      {
+        cwd: process.cwd(),
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      },
+    );
 
     let stdout = '';
     let stderr = '';
@@ -75,40 +82,30 @@ function runPowershell(args: string[]): Promise<{ stdout: string; stderr: string
 
 export const runCommandTool: ToolDefinition = {
   name: 'run_command',
-  description: 'Runs a small allowlisted read-only command. Supported command ids: pwd, ls, cat, whoami, hostname, node_version, pnpm_version.',
+  description: 'Runs a read-only PowerShell command after safety validation. Allowed prefixes include Get-Location, Get-ChildItem, Get-Content, whoami, hostname, node -v, pnpm.cmd -v, git status, and git diff --stat.',
   parameters: {
     command: {
       type: 'string',
-      description: 'The allowlisted command id to run: pwd, ls, cat, whoami, hostname, node_version, pnpm_version.',
-    },
-    target: {
-      type: 'string',
-      description: 'Optional path argument used by ls and required by cat.',
-      optional: true,
+      description: 'A read-only PowerShell command string. Command chaining, redirection, networking, and write operations are blocked.',
     },
   },
   timeoutMs: 8000,
-  execute: async ({ command, target }) => {
-    const commandId = String(command ?? '').trim();
-    const definition = ALLOWED_COMMANDS[commandId];
-
-    if (!definition) {
-      throw new Error(`Unsupported command "${commandId}"`);
-    }
-
-    const targetValue = typeof target === 'string' && target.trim() ? target.trim() : undefined;
-    if (definition.requiresTarget && !targetValue) {
-      throw new Error(`Command "${commandId}" requires a target`);
-    }
-
-    const result = await runPowershell(definition.args(targetValue));
+  execute: async ({ command }) => {
+    const safeCommand = assertSafeCommand(String(command ?? ''));
+    const result = await runPowershell(safeCommand);
+    const stdout = truncate(result.stdout.trim(), MAX_OUTPUT_CHARS);
+    const stderr = truncate(result.stderr.trim(), MAX_OUTPUT_CHARS);
+    const displayText =
+      result.exitCode !== 0
+        ? stderr || `Command failed with exit code ${String(result.exitCode)}.`
+        : stdout || '(no output)';
 
     return {
-      command: commandId,
-      target: targetValue ?? null,
+      command: safeCommand,
       exitCode: result.exitCode,
-      stdout: truncate(result.stdout.trim(), MAX_OUTPUT_CHARS),
-      stderr: truncate(result.stderr.trim(), MAX_OUTPUT_CHARS),
+      stdout,
+      stderr,
+      displayText,
     };
   },
 };
