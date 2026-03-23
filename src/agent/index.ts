@@ -1,4 +1,4 @@
-import { generateObject, generateText, Output, stepCountIs, streamText, type ModelMessage } from 'ai';
+import { generateText, Output, stepCountIs, streamText, type ModelMessage } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { z } from 'zod';
 import { config } from '@/config';
@@ -130,7 +130,7 @@ async function inferToolDecision(messages: ModelMessage[]): Promise<AgentDecisio
   if (!text) return null;
 
   try {
-    const { object } = await generateObject({
+    const { text: rawText } = await generateText({
       model: provider(config.model.id),
       system: [
         'You are a lightweight tool selector.',
@@ -149,8 +149,25 @@ async function inferToolDecision(messages: ModelMessage[]): Promise<AgentDecisio
         '',
         '[available_tools]',
         JSON.stringify(registry.summary()),
+        '',
+        '[output]',
+        'Return JSON only.',
+        '{"decision":"no_tool"}',
+        '{"decision":"get_current_time","arguments":{"timeZone":"Asia/Shanghai"}}',
+        '{"decision":"calculate_expression","arguments":{"expression":"1+2"}}',
+        '{"decision":"http_request","arguments":{"url":"https://example.com"}}',
+        '{"decision":"run_command","arguments":{"command":"Get-Date"}}',
       ].join('\n'),
-      schema: z.object({
+    });
+
+    const json = extractJsonObject(rawText);
+    if (!json) {
+      logger.warn({ text: rawText }, '[agent] tool inference returned non-json');
+      return null;
+    }
+
+    const object = z
+      .object({
         decision: z.enum([
           'no_tool',
           'get_current_time',
@@ -159,8 +176,8 @@ async function inferToolDecision(messages: ModelMessage[]): Promise<AgentDecisio
           'run_command',
         ]),
         arguments: z.record(z.string(), z.unknown()).optional(),
-      }),
-    });
+      })
+      .parse(JSON.parse(json));
 
     if (object.decision === 'no_tool') return null;
 
