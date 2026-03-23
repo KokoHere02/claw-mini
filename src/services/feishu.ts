@@ -36,6 +36,33 @@ async function feishuRequest<T>(
   return (await response.json()) as T;
 }
 
+async function feishuBinaryRequest(
+  path: string,
+  init: RequestInit,
+  accessToken?: string
+): Promise<{ data: Uint8Array; mediaType?: string }> {
+  const headers = new Headers(init.headers);
+  headers.set("content-type", "application/json; charset=utf-8");
+
+  if (accessToken) {
+    headers.set("authorization", `Bearer ${accessToken}`);
+  }
+
+  const response = await fetch(`${FEISHU_API_BASE}${path}`, {
+    ...init,
+    headers
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Feishu API request failed (${response.status}): ${body}`);
+  }
+
+  const data = new Uint8Array(await response.arrayBuffer());
+  const mediaType = response.headers.get("content-type") || undefined;
+  return { data, mediaType };
+}
+
 async function getTenantAccessToken(): Promise<string> {
   const now = Date.now();
   if (cachedToken && cachedToken.expiresAt > now + 60_000) {
@@ -83,6 +110,39 @@ export function isSummaryDebugCommand(content: string): boolean {
 export function isMemoryDebugCommand(content: string): boolean {
   const value = content.trim().toLowerCase();
   return value === '#memory' || value === '/memory';
+}
+
+export async function downloadMessageImage(
+  messageId: string,
+  imageKey: string,
+): Promise<{ data: Uint8Array; mediaType?: string }> {
+  const tenantAccessToken = await getTenantAccessToken();
+  return feishuBinaryRequest(
+    `/im/v1/messages/${encodeURIComponent(messageId)}/resources/${encodeURIComponent(imageKey)}?type=image`,
+    {
+      method: 'GET',
+      headers: {
+        'authorization': `Bearer ${tenantAccessToken}`,
+      },
+    },
+  );
+}
+
+export async function downloadMessageFile(
+  messageId: string,
+  fileKey: string,
+): Promise<{ data: Uint8Array; mediaType?: string }> {
+  const tenantAccessToken = await getTenantAccessToken();
+
+  return feishuBinaryRequest(
+    `/im/v1/messages/${encodeURIComponent(messageId)}/resources/${encodeURIComponent(fileKey)}?type=file`,
+    {
+      method: 'GET',
+      headers: {
+        'authorization': `Bearer ${tenantAccessToken}`,
+      },
+    },
+  );
 }
 
 export async function sendTextMessage(
