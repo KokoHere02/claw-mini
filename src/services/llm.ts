@@ -2,7 +2,6 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
 import { streamText } from "ai";
 import { config } from "@/config"
 import { ConversationMessage } from "@/services/memory"
-import logger from "@/utils/logger";
 
 const provider = createOpenAICompatible({
   name: config.model.id,
