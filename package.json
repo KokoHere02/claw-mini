@@ -4,8 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "test": "tsx src/tests/agent-tools.ts"
+    "dev": "scripts\\tsx-utf8.cmd watch src/index.ts",
+    "test": "scripts\\tsx-utf8.cmd src/tests/agent-tools.ts",
+    "test:task-agent": "scripts\\tsx-utf8.cmd src/tests/task-agent.ts"
   },
   "keywords": [],
   "author": "",

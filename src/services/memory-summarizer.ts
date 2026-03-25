@@ -1,6 +1,5 @@
-import { generateObject } from 'ai';
+import { stepCountIs, streamText } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { z } from 'zod';
 import { config } from '@/config';
 import type { ConversationMessage } from './memory';
 
@@ -15,6 +14,74 @@ type SummarizeResult = {
   recentMessages: ConversationMessage[];
 };
 
+const LOCAL_SUMMARY_MAX_LENGTH = 1200;
+
+function extractJsonObject(text: string): string | null {
+  const fenced = text.match(/```json\s*([\s\S]*?)```/i);
+  if (fenced) return fenced[1].trim();
+
+  const start = text.indexOf('{');
+  if (start < 0) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (char === '{') depth += 1;
+    if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, index + 1).trim();
+    }
+  }
+
+  return null;
+}
+
+function parseJsonLikeText(text: string): unknown {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    throw new Error('JSON text is empty');
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (typeof parsed === 'string') {
+      return parseJsonLikeText(parsed);
+    }
+    return parsed;
+  } catch {}
+
+  const extracted = extractJsonObject(trimmed);
+  if (!extracted) {
+    throw new Error('No JSON object found in text');
+  }
+
+  const parsed = JSON.parse(extracted);
+  if (typeof parsed === 'string') {
+    return parseJsonLikeText(parsed);
+  }
+  return parsed;
+}
+
 function stringifyMessage(message: ConversationMessage): string {
   if (typeof message.content === 'string') {
     return `[${message.role}] ${message.content}`;
@@ -26,6 +93,18 @@ function stringifyMessage(message: ConversationMessage): string {
     .trim();
 
   return content ? `[${message.role}] ${content}` : `[${message.role}]`;
+}
+
+function buildLocalFallbackSummary(currentSummary: string, transcript: string): string {
+  const parts = [
+    currentSummary.trim(),
+    transcript.trim(),
+  ].filter(Boolean);
+
+  const merged = parts.join('\n');
+  if (!merged) return '';
+
+  return merged.slice(-LOCAL_SUMMARY_MAX_LENGTH).trim();
 }
 
 export async function maybeSummarizeSession(input: {
@@ -47,7 +126,7 @@ export async function maybeSummarizeSession(input: {
 
   const transcript = messagesToSummarize.map(stringifyMessage).join('\n');
 
-  const { object } = await generateObject({
+  const result = streamText({
     model: provider(config.model.id),
     system:
       config.memory.summaryPrompt
@@ -59,13 +138,33 @@ export async function maybeSummarizeSession(input: {
       '[new_messages_to_compress]',
       transcript,
     ].join('\n'),
-    schema: z.object({
-      summary: z.string(),
-    }),
+    stopWhen: stepCountIs(1),
   });
 
-  return {
-    summary: object.summary.trim(),
-    recentMessages: messagesToKeep,
-  };
+  let text = '';
+  for await (const chunk of result.textStream) {
+    text += chunk;
+  }
+
+  try {
+    const parsed = parseJsonLikeText(text) as { summary?: unknown };
+    if (typeof parsed.summary !== 'string' || !parsed.summary.trim()) {
+      throw new Error('Memory summarizer returned an invalid summary');
+    }
+
+    return {
+      summary: parsed.summary.trim(),
+      recentMessages: messagesToKeep,
+    };
+  } catch {
+    const fallbackSummary = buildLocalFallbackSummary(currentSummary, transcript);
+    if (!fallbackSummary) {
+      return null;
+    }
+
+    return {
+      summary: fallbackSummary,
+      recentMessages: messagesToKeep,
+    };
+  }
 }

@@ -1,9 +1,9 @@
-import { generateText, Output, stepCountIs, streamText, type ModelMessage } from 'ai';
+import { stepCountIs, streamText, type ModelMessage } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { z } from 'zod';
 import { config } from '@/config';
 import { registry } from './tool-registry';
-import type { ToolDefinition, ToolParameters } from './tool-types';
+import type { ToolDefinition } from './tool-types';
 import { runner } from './tool-runner';
 import logger from '@/utils/logger';
 import { buildAnswerPrompt, buildPlannerPrompt, buildRecoveryPrompt } from './prompt-builder';
@@ -58,6 +58,32 @@ function extractJsonObject(text: string): string | null {
   return null;
 }
 
+function parseJsonLikeText(text: string): unknown {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    throw new Error('JSON text is empty');
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (typeof parsed === 'string') {
+      return parseJsonLikeText(parsed);
+    }
+    return parsed;
+  } catch {}
+
+  const extracted = extractJsonObject(trimmed);
+  if (!extracted) {
+    throw new Error('No JSON object found in text');
+  }
+
+  const parsed = JSON.parse(extracted);
+  if (typeof parsed === 'string') {
+    return parseJsonLikeText(parsed);
+  }
+  return parsed;
+}
+
 function normalizeDecision(raw: unknown): AgentDecision | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const value = raw as Record<string, unknown>;
@@ -109,6 +135,14 @@ function hasPostUserAgentContext(messages: ModelMessage[]): boolean {
 }
 
 function shouldReturnDirectToolAnswer(messages: ModelMessage[], tool: ToolDefinition): boolean {
+  const hasTaskExecutionContext = messages.some((message) => {
+    if (message.role !== 'system') return false;
+    return getMessageText(message).includes('[TASK_EXECUTION_CONTEXT]');
+  });
+  if (hasTaskExecutionContext) {
+    return tool.directReturn === true;
+  }
+
   const lastUserIndex = findLastUserMessageIndex(messages);
   if (lastUserIndex < 0) return false;
 
@@ -130,9 +164,8 @@ async function inferToolDecision(messages: ModelMessage[]): Promise<AgentDecisio
   if (!text) return null;
 
   try {
-    const { text: rawText } = await generateText({
-      model: provider(config.model.id),
-      system: [
+    const rawText = await collectPromptText(
+      [
         'You are a lightweight tool selector.',
         'Decide whether the latest user message should immediately call one available tool.',
         'If you are not confident, return no_tool.',
@@ -143,7 +176,7 @@ async function inferToolDecision(messages: ModelMessage[]): Promise<AgentDecisio
         'Do not use command chaining, redirection, pipes, networking, or write operations.',
         'For get_current_time, provide timeZone only when explicitly requested.',
       ].join('\n'),
-      prompt: [
+      [
         '[latest_user_message]',
         text,
         '',
@@ -158,10 +191,12 @@ async function inferToolDecision(messages: ModelMessage[]): Promise<AgentDecisio
         '{"decision":"http_request","arguments":{"url":"https://example.com"}}',
         '{"decision":"run_command","arguments":{"command":"Get-Date"}}',
       ].join('\n'),
-    });
+    );
 
-    const json = extractJsonObject(rawText);
-    if (!json) {
+    let parsed: unknown;
+    try {
+      parsed = parseJsonLikeText(rawText);
+    } catch {
       logger.warn({ text: rawText }, '[agent] tool inference returned non-json');
       return null;
     }
@@ -177,7 +212,7 @@ async function inferToolDecision(messages: ModelMessage[]): Promise<AgentDecisio
         ]),
         arguments: z.record(z.string(), z.unknown()).optional(),
       })
-      .parse(JSON.parse(json));
+      .parse(parsed);
 
     if (object.decision === 'no_tool') return null;
 
@@ -193,6 +228,22 @@ async function inferToolDecision(messages: ModelMessage[]): Promise<AgentDecisio
     logger.warn({ err: error }, '[agent] ai tool inference failed');
     return null;
   }
+}
+
+async function collectPromptText(system: string, prompt: string): Promise<string> {
+  const result = streamText({
+    model: provider(config.model.id),
+    system,
+    prompt,
+    stopWhen: stepCountIs(1),
+  });
+
+  let text = '';
+  for await (const chunk of result.textStream) {
+    text += chunk;
+  }
+
+  return text.trim();
 }
 
 async function collectText(messages: ModelMessage[], system: string): Promise<string> {
@@ -232,11 +283,9 @@ async function planNextStep(step: number, messages: ModelMessage[]): Promise<Age
   }
 
   const text = await collectText(messages, buildPlannerPrompt(getPromptContext(step, messages)));
-  const json = extractJsonObject(text);
-  if (!json) return null;
 
   try {
-    return normalizeDecision(JSON.parse(json));
+    return normalizeDecision(parseJsonLikeText(text));
   } catch (error) {
     logger.warn({ text, err: error }, '[agent] failed to parse planner JSON');
     return null;
