@@ -1,6 +1,7 @@
 import { config } from '@/config';
-import { runAgent } from '@/agent';
 import { buildSummaryContextMessage } from '@/agent/dynamic-prompt';
+import { runTaskAgent } from '@/agent/task-agent';
+import type { TaskProgressEvent } from '@/agent/task-types';
 import {
   isMemoryDebugCommand,
   isResetCommand,
@@ -23,6 +24,100 @@ const memoryService = new MemoryService(
   new FileMemoryRepository(),
 );
 
+function summarizeError(error: unknown): Record<string, unknown> {
+  if (!(error instanceof Error)) {
+    return { message: String(error) };
+  }
+
+  const value = error as Error & { url?: string; statusCode?: number };
+  return {
+    name: value.name,
+    message: value.message,
+    url: value.url,
+    statusCode: value.statusCode,
+  };
+}
+
+function logTaskProgress(chatId: string, eventId: string, event: TaskProgressEvent): void {
+  switch (event.type) {
+    case 'planned':
+      logger.info(
+        {
+          chatId,
+          eventId,
+          goal: event.plan.goal,
+          steps: event.plan.steps.map((step) => ({
+            id: step.id,
+            title: step.title,
+          })),
+        },
+        'task planned',
+      );
+      return;
+    case 'step_started':
+      logger.info(
+        {
+          chatId,
+          eventId,
+          stepId: event.stepId,
+          index: event.index,
+          total: event.total,
+          title: event.title,
+        },
+        'task step started',
+      );
+      return;
+    case 'step_completed':
+      logger.info(
+        {
+          chatId,
+          eventId,
+          stepId: event.stepId,
+          index: event.index,
+          total: event.total,
+          title: event.title,
+          resultPreview: event.result.slice(0, 200),
+        },
+        'task step completed',
+      );
+      return;
+    case 'step_failed':
+      logger.warn(
+        {
+          chatId,
+          eventId,
+          stepId: event.stepId,
+          index: event.index,
+          total: event.total,
+          title: event.title,
+          error: event.error,
+        },
+        'task step failed',
+      );
+      return;
+    case 'completed':
+      logger.info(
+        {
+          chatId,
+          eventId,
+          answerPreview: event.answer.slice(0, 200),
+        },
+        'task completed',
+      );
+      return;
+    case 'failed':
+      logger.warn(
+        {
+          chatId,
+          eventId,
+          error: event.error,
+        },
+        'task failed',
+      );
+      return;
+  }
+}
+
 export async function handleMessage(body: FeishuEventPayload): Promise<void> {
   const { event, header } = body;
 
@@ -40,7 +135,16 @@ export async function handleMessage(body: FeishuEventPayload): Promise<void> {
   logger.info({ chatId, eventId: header.event_id }, 'handling message');
 
   try {
-    logger.info({ event }, 'received message');
+    logger.info(
+      {
+        chatId,
+        eventId: header.event_id,
+        messageId: event.message.message_id,
+        messageType: event.message.message_type,
+        senderType: event.sender?.sender_type,
+      },
+      'received message',
+    );
     if (!['text', 'post', 'image', 'file'].includes(event.message.message_type)) {
       logger.info({ chatId, messageType: event.message.message_type }, 'unsupported message type');
       await sendTextMessage(chatId, 'Currently only text, image, file, and post messages are supported.');
@@ -94,7 +198,13 @@ export async function handleMessage(body: FeishuEventPayload): Promise<void> {
       userMessage,
     ];
 
-    const reply = (await runAgent(conversation)) || 'I could not prepare a reply just now. Please try again.';
+    const taskResult = await runTaskAgent({
+      messages: conversation,
+      onProgress(progressEvent) {
+        logTaskProgress(chatId, header.event_id, progressEvent);
+      },
+    });
+    const reply = taskResult.answer || 'I could not prepare a reply just now. Please try again.';
 
     memoryService.appendExchange(chatId, contentForMemory, reply);
     try {
@@ -111,14 +221,16 @@ export async function handleMessage(body: FeishuEventPayload): Promise<void> {
           {
             chatId,
             summaryLength: summarizeResult.summary.length,
-            summaryPreview: summarizeResult.summary.slice(0, 200),
             remainingRecentMessages: summarizeResult.recentMessages.length,
           },
           'conversation summary refreshed',
         );
       }
     } catch (error) {
-      logger.warn({ err: error, chatId }, 'failed to refresh conversation summary');
+      logger.info(
+        { chatId, err: summarizeError(error) },
+        'failed to refresh conversation summary',
+      );
     }
 
     await sendTextMessage(chatId, reply);
@@ -127,11 +239,17 @@ export async function handleMessage(body: FeishuEventPayload): Promise<void> {
   } catch (error) {
     memoryService.markEventFailed(header.event_id);
     if (error instanceof UnsupportedAttachmentError) {
-      logger.warn({ err: error, chatId, eventId: header.event_id }, 'unsupported attachment');
+      logger.warn(
+        { chatId, eventId: header.event_id, err: summarizeError(error) },
+        'unsupported attachment',
+      );
       await sendTextMessage(chatId, error.message).catch(() => {});
       return;
     }
-    logger.error({ err: error, chatId, eventId: header.event_id }, 'error handling message');
+    logger.error(
+      { chatId, eventId: header.event_id, err: summarizeError(error) },
+      'error handling message',
+    );
     await sendTextMessage(chatId, 'Service error. The issue has been recorded.').catch(() => {});
   }
 }
