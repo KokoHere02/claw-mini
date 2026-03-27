@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "scripts\\tsx-utf8.cmd watch src/index.ts",
     "test": "scripts\\tsx-utf8.cmd src/tests/agent-tools.ts",
-    "test:task-agent": "scripts\\tsx-utf8.cmd src/tests/task-agent.ts"
+    "test:task-agent": "scripts\\tsx-utf8.cmd src/tests/task-agent.ts",
+    "test:unit": "vitest run",
+    "test:unit:watch": "vitest"
   },
   "keywords": [],
   "author": "",
@@ -30,6 +32,7 @@
   "devDependencies": {
     "@types/node": "^25.5.0",
     "@types/ws": "^8.18.1",
-    "tsx": "^4.21.0"
+    "tsx": "^4.21.0",
+    "vitest": "^4.1.2"
   }
 }

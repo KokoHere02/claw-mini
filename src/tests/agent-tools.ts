@@ -1,10 +1,10 @@
-import assert from 'node:assert/strict';
+﻿import assert from 'node:assert/strict';
 import { runCommandTool } from '@/agent/tools/run-command';
 import { calculateExpressionTool } from '@/agent/tools/calculate-expression';
 import { getCurrentTimeTool } from '@/agent/tools/get-current-time';
 
 async function testRunCommandAllowsReadOnlyCommand() {
-  const result = await runCommandTool.execute({ command: 'Get-Location' }) as {
+  const result = await runCommandTool.execute({ params: { command: 'Get-Location' } }) as {
     command: string;
     exitCode: number | null;
     stdout: string;
@@ -19,20 +19,20 @@ async function testRunCommandAllowsReadOnlyCommand() {
 
 async function testRunCommandRejectsDangerousCommand() {
   await assert.rejects(
-    () => runCommandTool.execute({ command: 'Remove-Item test.txt' }),
+    () => runCommandTool.execute({ params: { command: 'Remove-Item test.txt' } }),
     /not allowed/i,
   );
 }
 
 async function testRunCommandRejectsUnknownReadPatterns() {
   await assert.rejects(
-    () => runCommandTool.execute({ command: 'Get-Process' }),
+    () => runCommandTool.execute({ params: { command: 'Get-Process' } }),
     /prefix is not allowed/i,
   );
 }
 
 async function testCalculateExpressionDisplayText() {
-  const result = await calculateExpressionTool.execute({ expression: '(2 + 3) * 4' }) as {
+  const result = await calculateExpressionTool.execute({ params: { expression: '(2 + 3) * 4' } }) as {
     result: number;
     displayText: string;
   };
@@ -42,7 +42,7 @@ async function testCalculateExpressionDisplayText() {
 }
 
 async function testGetCurrentTimeDisplayText() {
-  const result = await getCurrentTimeTool.execute({ timeZone: 'Asia/Shanghai' }) as {
+  const result = await getCurrentTimeTool.execute({ params: { timeZone: 'Asia/Shanghai' } }) as {
     timeZone: string;
     displayText: string;
   };
