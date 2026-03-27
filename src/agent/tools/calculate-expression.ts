@@ -159,14 +159,15 @@ export const calculateExpressionTool: ToolDefinition = {
   name: 'calculate_expression',
   description: 'Evaluates arithmetic expressions with numbers, parentheses, and + - * / operators.',
   directReturn: true,
+  readonly: true,
   parameters: {
     expression: {
       type: 'string',
       description: 'An arithmetic expression such as (2 + 3) * 4 / 5.',
     },
   },
-  execute: async ({ expression }) => {
-    const input = String(expression ?? '').trim();
+  execute: async ({ params }) => {
+    const input = String(params.expression ?? '').trim();
     if (!input) throw new Error('Expression must not be empty');
     const result = evaluateExpression(input);
 

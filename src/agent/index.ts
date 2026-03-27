@@ -156,7 +156,10 @@ function shouldReturnDirectToolAnswer(messages: ModelMessage[], tool: ToolDefini
   return tool.directReturn === true;
 }
 
-async function inferToolDecision(messages: ModelMessage[]): Promise<AgentDecision | null> {
+async function inferToolDecision(
+  messages: ModelMessage[],
+  signal?: AbortSignal,
+): Promise<AgentDecision | null> {
   const lastUserMessage = [...messages].reverse().find((message) => message.role === 'user');
   if (!lastUserMessage) return null;
 
@@ -191,6 +194,7 @@ async function inferToolDecision(messages: ModelMessage[]): Promise<AgentDecisio
         '{"decision":"http_request","arguments":{"url":"https://example.com"}}',
         '{"decision":"run_command","arguments":{"command":"Get-Date"}}',
       ].join('\n'),
+      signal,
     );
 
     let parsed: unknown;
@@ -230,12 +234,17 @@ async function inferToolDecision(messages: ModelMessage[]): Promise<AgentDecisio
   }
 }
 
-async function collectPromptText(system: string, prompt: string): Promise<string> {
+async function collectPromptText(
+  system: string,
+  prompt: string,
+  signal?: AbortSignal,
+): Promise<string> {
   const result = streamText({
     model: provider(config.model.id),
     system,
     prompt,
     stopWhen: stepCountIs(1),
+    abortSignal: signal,
   });
 
   let text = '';
@@ -246,12 +255,17 @@ async function collectPromptText(system: string, prompt: string): Promise<string
   return text.trim();
 }
 
-async function collectText(messages: ModelMessage[], system: string): Promise<string> {
+async function collectText(
+  messages: ModelMessage[],
+  system: string,
+  signal?: AbortSignal,
+): Promise<string> {
   const result = streamText({
     model: provider(config.model.id),
     system,
     messages,
     stopWhen: stepCountIs(1),
+    abortSignal: signal,
   });
 
   let text = '';
@@ -273,16 +287,24 @@ function getPromptContext(step: number, messages: ModelMessage[]) {
   };
 }
 
-async function planNextStep(step: number, messages: ModelMessage[]): Promise<AgentDecision | null> {
+async function planNextStep(
+  step: number,
+  messages: ModelMessage[],
+  signal?: AbortSignal,
+): Promise<AgentDecision | null> {
   if (!hasPostUserAgentContext(messages)) {
-    const inferred = await inferToolDecision(messages);
+    const inferred = await inferToolDecision(messages, signal);
     if (inferred) {
       logger.info({ decision: inferred }, '[agent] ai tool selection');
       return inferred;
     }
   }
 
-  const text = await collectText(messages, buildPlannerPrompt(getPromptContext(step, messages)));
+  const text = await collectText(
+    messages,
+    buildPlannerPrompt(getPromptContext(step, messages)),
+    signal,
+  );
 
   try {
     return normalizeDecision(parseJsonLikeText(text));
@@ -327,14 +349,18 @@ function getToolDisplayText(result: unknown): string | null {
   return typeof value.displayText === 'string' && value.displayText.trim() ? value.displayText : null;
 }
 
-export async function runAgent(messages: ModelMessage[]): Promise<string> {
+export async function runAgent(
+  messages: ModelMessage[],
+  options: { signal?: AbortSignal } = {},
+): Promise<string> {
   const workingMessages = [...messages];
   const maxSteps = config.agent.maxSteps;
+  const { signal } = options;
 
   for (let step = 1; step <= maxSteps; step += 1) {
     let decision: AgentDecision | null;
     try {
-      decision = await planNextStep(step, workingMessages);
+      decision = await planNextStep(step, workingMessages, signal);
       logger.info({ decision }, '[agent] planner output');
     } catch (error) {
       logger.error({ err: error, step }, '[agent] failed while planning next step');
@@ -344,7 +370,11 @@ export async function runAgent(messages: ModelMessage[]): Promise<string> {
 
     if (!decision) {
       try {
-        const fallback = await collectText(workingMessages, buildAnswerPrompt(getPromptContext(step, workingMessages)));
+        const fallback = await collectText(
+          workingMessages,
+          buildAnswerPrompt(getPromptContext(step, workingMessages)),
+          signal,
+        );
         logger.info({ step, text: fallback }, '[agent] execution finished without tool plan');
         return fallback;
       } catch (error) {
@@ -376,7 +406,7 @@ export async function runAgent(messages: ModelMessage[]): Promise<string> {
     logger.info({ step, tool: toolDefinition.name, arguments: toolArgs }, '[agent] tool selected');
 
     try {
-      const toolResult = await runner.run(toolDefinition, toolArgs);
+      const toolResult = await runner.run(toolDefinition, toolArgs, { signal });
       const directAnswer = getToolDisplayText(toolResult);
       if (directAnswer && shouldReturnDirectToolAnswer(workingMessages, toolDefinition)) {
         logger.info({ step, tool: toolDefinition.name, text: directAnswer }, '[agent] execution finished with direct tool answer');
@@ -419,6 +449,7 @@ export async function runAgent(messages: ModelMessage[]): Promise<string> {
         getPromptContext(maxSteps, workingMessages),
         `You have reached the maximum tool/planning steps (${maxSteps}). Use the information already gathered and provide the best final answer now.`,
       ),
+      signal,
     );
     logger.warn({ text: fallback, maxSteps }, '[agent] execution stopped at max steps');
     return fallback;

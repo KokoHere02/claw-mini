@@ -1,6 +1,7 @@
 import type { ModelMessage } from 'ai';
 import logger from '@/utils/logger';
 import type { MemoryRepository } from './memory-repository';
+import { runBackgroundTask } from './background-task';
 export type ConversationMessage = ModelMessage;
 
 export type SessionMemory = {
@@ -54,7 +55,7 @@ export class MemoryService {
       summary: summary.trim(),
     };
     this.sessions.set(chatId, nextSession);
-    this.persistSession(chatId, nextSession);
+    this.schedulePersistSession(chatId, nextSession);
   }
 
   replaceRecentMessages(chatId: string, recentMessages: ConversationMessage[]): void {
@@ -64,7 +65,7 @@ export class MemoryService {
       recentMessages,
     };
     this.sessions.set(chatId, nextSession);
-    this.persistSession(chatId, nextSession);
+    this.schedulePersistSession(chatId, nextSession);
   }
 
   appendExchange(chatId: string, userText: string, assistantText: string): void {
@@ -81,16 +82,12 @@ export class MemoryService {
       recentMessages: next.slice(-maxMessage),
     };
     this.sessions.set(chatId, nextSession);
-    this.persistSession(chatId, nextSession);
+    this.schedulePersistSession(chatId, nextSession);
   }
 
   resetConversation(chatId: string): void {
     this.sessions.delete(chatId);
-    try {
-      this.repository?.delete(chatId);
-    } catch (error) {
-      logger.warn({ err: error, chatId }, 'failed to delete persisted memory');
-    }
+    this.scheduleDeleteSession(chatId);
   }
 
   tryStartEvent(eventId: string): boolean {
@@ -123,6 +120,26 @@ export class MemoryService {
         this.events.delete(eventId);
       }
     }
+  }
+
+  private schedulePersistSession(chatId: string, session: SessionMemory): void {
+    if (!this.repository) return;
+
+    runBackgroundTask(() => {
+      this.persistSession(chatId, session);
+    }, `persist memory for ${chatId}`);
+  }
+
+  private scheduleDeleteSession(chatId: string): void {
+    if (!this.repository) return;
+
+    runBackgroundTask(() => {
+      try {
+        this.repository?.delete(chatId);
+      } catch (error) {
+        logger.warn({ err: error, chatId }, 'failed to delete persisted memory');
+      }
+    }, `delete memory for ${chatId}`);
   }
 
   private persistSession(chatId: string, session: SessionMemory): void {

@@ -8,13 +8,19 @@ export type ToolParameterDefinition = {
 
 export type ToolParameters = Record<string, ToolParameterDefinition>;
 
+export type ToolExecuteInput = {
+  params: Record<string, unknown>;
+  signal?: AbortSignal;
+};
+
 export type ToolDefinition = {
   name: string;
   description: string;
   parameters: ToolParameters;
-  execute: (params: Record<string, unknown>) => Promise<unknown>;
+  execute: (input: ToolExecuteInput) => Promise<unknown>;
   timeoutMs?: number;
   directReturn?: boolean;
+  readonly?: boolean;
 };
 
 export type ToolSummary = {

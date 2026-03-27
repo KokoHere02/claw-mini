@@ -26,6 +26,10 @@ export type AppConfig = {
   };
   agent: {
     maxSteps: number;
+    stepTimeoutMs: number;
+    maxParallelReadonlyTools: number;
+    parallelReadonlyPlanTimeoutMs: number;
+    parallelReadonlyExecutionBudgetMs: number;
     plannerPrompt?: string;
     plannerPromptFile?: string;
   };
@@ -135,6 +139,10 @@ export const config: AppConfig = {
   },
   agent: {
     maxSteps: getIntEnv('AGENT_MAX_STEPS', 6),
+    stepTimeoutMs: Math.max(0, getIntEnv('AGENT_STEP_TIMEOUT_MS', 0)),
+    maxParallelReadonlyTools: Math.max(1, getIntEnv('AGENT_MAX_PARALLEL_READONLY_TOOLS', 3)),
+    parallelReadonlyPlanTimeoutMs: Math.max(1000, getIntEnv('AGENT_PARALLEL_READONLY_PLAN_TIMEOUT_MS', 5000)),
+    parallelReadonlyExecutionBudgetMs: Math.max(1000, getIntEnv('AGENT_PARALLEL_READONLY_EXECUTION_BUDGET_MS', 9000)),
     plannerPromptFile: agentPlannerPromptOverride.file ?? defaultAgentPlannerPromptFile.file,
     plannerPrompt:
       agentPlannerPromptOverride.content

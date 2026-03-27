@@ -4,6 +4,7 @@ export const getCurrentTimeTool: ToolDefinition = {
   name: 'get_current_time',
   description: 'Returns the current server time and an ISO timestamp.',
   directReturn: true,
+  readonly: true,
   parameters: {
     timeZone: {
       type: 'string',
@@ -11,10 +12,10 @@ export const getCurrentTimeTool: ToolDefinition = {
       optional: true,
     },
   },
-  execute: async ({ timeZone }) => {
+  execute: async ({ params }) => {
     const now = new Date();
     const requestedZone =
-      typeof timeZone === 'string' && timeZone.trim() ? timeZone.trim() : undefined;
+      typeof params.timeZone === 'string' && params.timeZone.trim() ? params.timeZone.trim() : undefined;
 
     const formatted = new Intl.DateTimeFormat('en-US', {
       dateStyle: 'full',

@@ -2,12 +2,16 @@ export type TaskRunStatus =
   | 'planning'
   | 'running'
   | 'completed'
+  | 'cancelled'
+  | 'timed_out'
   | 'failed';
 
 export type TaskStepStatus =
   | 'pending'
   | 'running'
   | 'completed'
+  | 'cancelled'
+  | 'timed_out'
   | 'failed'
   | 'skipped';
 
@@ -23,13 +27,14 @@ export type TaskStep = {
   title: string;
   goal: string;
   expectedOutput: string;
+  dependsOn?: string[];
   status: TaskStepStatus;
   result?: string;
   error?: string;
   toolCalls?: TaskStepToolCall[];
 };
 
-export type TaskPlanStep = Pick<TaskStep, 'id' | 'title' | 'goal' | 'expectedOutput'>;
+export type TaskPlanStep = Pick<TaskStep, 'id' | 'title' | 'goal' | 'expectedOutput' | 'dependsOn'>;
 
 export type TaskPlan = {
   goal: string;
@@ -48,7 +53,7 @@ export type TaskRun = {
 
 export type TaskExecutionReport = {
   goal: string;
-  status: Extract<TaskRunStatus, 'completed' | 'failed'>;
+  status: Extract<TaskRunStatus, 'completed' | 'cancelled' | 'timed_out' | 'failed'>;
   steps: Array<{
     id: string;
     title: string;
@@ -83,7 +88,25 @@ export type TaskProgressEvent =
       title: string;
       error: string;
     }
+  | {
+      type: 'step_cancelled';
+      stepId: string;
+      index: number;
+      total: number;
+      title: string;
+      error: string;
+    }
+  | {
+      type: 'step_timed_out';
+      stepId: string;
+      index: number;
+      total: number;
+      title: string;
+      error: string;
+    }
   | { type: 'completed'; answer: string }
+  | { type: 'cancelled'; error: string }
+  | { type: 'timed_out'; error: string }
   | { type: 'failed'; error: string };
 
 export type TaskOrchestrationResult = {

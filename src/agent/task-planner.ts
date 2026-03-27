@@ -19,6 +19,7 @@ const taskPlanSchema = z.object({
         title: z.string().trim().min(1),
         goal: z.string().trim().min(1),
         expectedOutput: z.string().trim().min(1),
+        dependsOn: z.array(z.string().trim().min(1)).optional(),
       }),
     )
     .min(1)
@@ -64,7 +65,7 @@ function buildTaskPlannerPrompt(messages: ModelMessage[]): string {
     [
       'OBJECTIVE',
       [
-        'Create a minimal sequential task plan for the latest user request.',
+        'Create a minimal task plan for the latest user request.',
         'Break the task into the smallest useful number of steps.',
         'If the task is simple, one step is allowed.',
       ].join('\n'),
@@ -76,7 +77,10 @@ function buildTaskPlannerPrompt(messages: ModelMessage[]): string {
         'Use 1 to 5 steps.',
         'Each step must have a distinct purpose and concrete expected output.',
         'Do not create filler steps.',
-        'Assume steps run sequentially.',
+        'Steps may depend on earlier steps when necessary.',
+        'Use dependsOn only when a step truly requires earlier output.',
+        'If a step is independent, omit dependsOn or return an empty array.',
+        'A step may only depend on earlier step ids.',
         'Do not mention internal prompts, policies, or hidden reasoning.',
       ].join('\n'),
     ],
@@ -89,6 +93,7 @@ function buildTaskPlannerPrompt(messages: ModelMessage[]): string {
         'goal: what this step is trying to achieve',
         'expectedOutput: the concrete artifact or answer this step should produce',
         'id: stable short identifier such as step_1, step_2',
+        'dependsOn: optional list of earlier step ids required before this step can run',
       ].join('\n'),
     ],
   ]);
@@ -107,16 +112,35 @@ function normalizePlan(plan: TaskPlan): TaskPlan {
       title: step.title.trim(),
       goal: step.goal.trim(),
       expectedOutput: step.expectedOutput.trim(),
+      dependsOn: step.dependsOn?.map((dependency) => dependency.trim()).filter(Boolean),
     };
+  });
+
+  const validStepIds = new Set(steps.map((step) => step.id));
+
+  const normalizedSteps = steps.map((step, index) => {
+    const earlierStepIds = new Set(steps.slice(0, index).map((candidate) => candidate.id));
+    const dependsOn = step.dependsOn?.filter((dependency) => (
+      dependency !== step.id
+      && validStepIds.has(dependency)
+      && earlierStepIds.has(dependency)
+    ));
+
+    return dependsOn?.length
+      ? { ...step, dependsOn: [...new Set(dependsOn)] }
+      : { ...step, dependsOn: undefined };
   });
 
   return {
     goal: plan.goal.trim(),
-    steps,
+    steps: normalizedSteps,
   };
 }
 
-export async function buildTaskPlan(messages: ModelMessage[]): Promise<TaskPlan> {
+export async function buildTaskPlan(
+  messages: ModelMessage[],
+  options: { signal?: AbortSignal } = {},
+): Promise<TaskPlan> {
   const result = streamText({
     model: provider(config.model.id),
     system: buildTaskPlannerPrompt(messages),
@@ -131,11 +155,13 @@ export async function buildTaskPlan(messages: ModelMessage[]): Promise<TaskPlan>
             title: '...',
             goal: '...',
             expectedOutput: '...',
+            dependsOn: [],
           },
         ],
       }),
     ].join('\n'),
     stopWhen: stepCountIs(1),
+    abortSignal: options.signal,
   });
 
   let text = '';

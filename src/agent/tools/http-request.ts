@@ -26,7 +26,13 @@ function isBlockedIp(address: string): boolean {
   return false;
 }
 
-async function assertSafeUrl(rawUrl: string): Promise<URL> {
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error ? signal.reason : new Error('HTTP request aborted');
+  }
+}
+
+async function assertSafeUrl(rawUrl: string, signal?: AbortSignal): Promise<URL> {
   let url: URL;
   try {
     url = new URL(rawUrl);
@@ -43,11 +49,13 @@ async function assertSafeUrl(rawUrl: string): Promise<URL> {
     throw new Error('Localhost addresses are not allowed');
   }
 
+  throwIfAborted(signal);
   const addresses = await dns.lookup(hostname, { all: true });
   if (!addresses.length) {
     throw new Error('Unable to resolve target host');
   }
 
+  throwIfAborted(signal);
   for (const record of addresses) {
     if (isBlockedIp(record.address)) {
       throw new Error('Private or loopback network addresses are not allowed');
@@ -65,6 +73,7 @@ function truncate(text: string, limit: number): string {
 export const httpRequestTool: ToolDefinition = {
   name: 'http_request',
   description: 'Fetches a public HTTPS URL with a safe GET request and returns a truncated response body.',
+  readonly: true,
   parameters: {
     url: {
       type: 'string',
@@ -72,14 +81,16 @@ export const httpRequestTool: ToolDefinition = {
     },
   },
   timeoutMs: 8000,
-  execute: async ({ url }) => {
-    const rawUrl = String(url ?? '').trim();
+  execute: async ({ params, signal }) => {
+    const rawUrl = String(params.url ?? '').trim();
     if (!rawUrl) throw new Error('URL must not be empty');
 
-    const safeUrl = await assertSafeUrl(rawUrl);
+    const safeUrl = await assertSafeUrl(rawUrl, signal);
+    throwIfAborted(signal);
     const response = await fetch(safeUrl, {
       method: 'GET',
       redirect: 'follow',
+      signal,
       headers: {
         'user-agent': 'claw-mini-agent/1.0',
         accept: 'application/json,text/plain,text/html;q=0.9,*/*;q=0.8',

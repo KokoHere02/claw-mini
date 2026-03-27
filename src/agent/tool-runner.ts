@@ -1,25 +1,7 @@
+import { createChildAbortSignal } from '@/utils/abort';
 import type { ToolDefinition, ToolParameters } from './tool-types';
 
 const DEFAULT_TIMEOUT_MS = 5000;
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(`Tool execution timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
-}
 
 function isPlainJsonValue(value: unknown): boolean {
   if (value == null) return true;
@@ -67,14 +49,29 @@ export class ToolRunner {
     return { ok: true };
   }
 
-  async run(tool: ToolDefinition, params: Record<string, unknown>): Promise<unknown> {
+  async run(
+    tool: ToolDefinition,
+    params: Record<string, unknown>,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<unknown> {
     const validation = this.validateParams(tool.parameters, params);
     if (!validation.ok) {
       throw new Error(`Invalid tool input: ${validation.reason}`);
     }
 
     const timeoutMs = tool.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    const result = await withTimeout(tool.execute({ ...params }), timeoutMs);
+    const toolAbort = createChildAbortSignal({
+      parentSignal: options.signal,
+      timeoutMs,
+      timeoutReason: `Tool "${tool.name}" timed out after ${timeoutMs}ms`,
+    });
+
+    const result = await tool.execute({
+      params: { ...params },
+      signal: toolAbort.signal,
+    }).finally(() => {
+      toolAbort.dispose();
+    });
 
     if (!isPlainJsonValue(result)) {
       throw new Error(`Tool "${tool.name}" returned a non-serializable result`);

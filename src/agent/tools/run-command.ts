@@ -50,8 +50,16 @@ function assertSafeCommand(rawCommand: string): string {
   return command;
 }
 
-function runPowershell(command: string): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
+function runPowershell(
+  command: string,
+  signal?: AbortSignal,
+): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason instanceof Error ? signal.reason : new Error('Command execution aborted'));
+      return;
+    }
+
     const child = spawn(
       'powershell.exe',
       ['-NoProfile', '-Command', command],
@@ -59,11 +67,20 @@ function runPowershell(command: string): Promise<{ stdout: string; stderr: strin
         cwd: process.cwd(),
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
+        signal,
       },
     );
 
     let stdout = '';
     let stderr = '';
+    let aborted = false;
+
+    const onAbort = () => {
+      aborted = true;
+      child.kill();
+    };
+
+    signal?.addEventListener('abort', onAbort, { once: true });
 
     child.stdout.on('data', (chunk) => {
       stdout += chunk.toString();
@@ -73,8 +90,16 @@ function runPowershell(command: string): Promise<{ stdout: string; stderr: strin
       stderr += chunk.toString();
     });
 
-    child.on('error', reject);
+    child.on('error', (error) => {
+      signal?.removeEventListener('abort', onAbort);
+      reject(error);
+    });
     child.on('close', (exitCode) => {
+      signal?.removeEventListener('abort', onAbort);
+      if (aborted || signal?.aborted) {
+        reject(signal?.reason instanceof Error ? signal.reason : new Error('Command execution aborted'));
+        return;
+      }
       resolve({ stdout, stderr, exitCode });
     });
   });
@@ -83,6 +108,7 @@ function runPowershell(command: string): Promise<{ stdout: string; stderr: strin
 export const runCommandTool: ToolDefinition = {
   name: 'run_command',
   description: 'Runs a read-only PowerShell command after safety validation. Allowed prefixes include Get-Location, Get-ChildItem, Get-Content, whoami, hostname, node -v, pnpm.cmd -v, git status, and git diff --stat.',
+  readonly: true,
   parameters: {
     command: {
       type: 'string',
@@ -90,9 +116,9 @@ export const runCommandTool: ToolDefinition = {
     },
   },
   timeoutMs: 8000,
-  execute: async ({ command }) => {
-    const safeCommand = assertSafeCommand(String(command ?? ''));
-    const result = await runPowershell(safeCommand);
+  execute: async ({ params, signal }) => {
+    const safeCommand = assertSafeCommand(String(params.command ?? ''));
+    const result = await runPowershell(safeCommand, signal);
     const stdout = truncate(result.stdout.trim(), MAX_OUTPUT_CHARS);
     const stderr = truncate(result.stderr.trim(), MAX_OUTPUT_CHARS);
     const displayText =
