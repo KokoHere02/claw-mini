@@ -1,4 +1,4 @@
-import fs from 'node:fs';
+﻿import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '@/config';
 import logger from '@/utils/logger';
@@ -38,7 +38,7 @@ export function cleanupExpiredMemoryFiles(storageDir: string = config.memory.sto
         deleted += 1;
       }
     } catch (error) {
-      logger.warn({ err: error, filePath }, 'failed to inspect persisted memory file');
+      logger.warn({ err: error, filePath }, '[memory_cleaner] inspect_failed');
     }
   }
 

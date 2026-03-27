@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+﻿import { spawn } from 'node:child_process';
 import type { ToolDefinition } from '../tool-types';
 
 const MAX_OUTPUT_CHARS = 4000;
@@ -124,7 +124,7 @@ export const runCommandTool: ToolDefinition = {
     const displayText =
       result.exitCode !== 0
         ? stderr || `Command failed with exit code ${String(result.exitCode)}.`
-        : stdout || '(no output)';
+        : stdout || '（无输出）';
 
     return {
       command: safeCommand,
@@ -135,3 +135,4 @@ export const runCommandTool: ToolDefinition = {
     };
   },
 };
+

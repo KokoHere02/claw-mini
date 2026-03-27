@@ -1,13 +1,13 @@
-import { config } from '@/config';
-import { WebhookAdapter } from '@/adapters/webhook';
+﻿import { config } from '@/config';
 import { LongConnectionAdapter } from '@/adapters/long-connection';
 import type { Adapter } from '@/adapters/types';
+import { WebhookAdapter } from '@/adapters/webhook';
 import { runBackgroundTask } from '@/services/background-task';
-import logger from '@/utils/logger';
 import { cleanupExpiredMemoryFiles } from '@/services/memory-cleaner';
+import logger from '@/utils/logger';
 
 const adapters: Record<string, () => Adapter> = {
-  'webhook':         () => new WebhookAdapter(),
+  webhook: () => new WebhookAdapter(),
   'long-connection': () => new LongConnectionAdapter(),
 };
 
@@ -23,7 +23,7 @@ runBackgroundTask(() => {
       scanned: cleanupResult.scanned,
       deleted: cleanupResult.deleted,
     },
-    'memory cleanup finished on startup',
+    '[app] startup_memory_cleanup_completed',
   );
 }, 'startup memory cleanup');
 

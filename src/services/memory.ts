@@ -1,7 +1,8 @@
-import type { ModelMessage } from 'ai';
+﻿import type { ModelMessage } from 'ai';
 import logger from '@/utils/logger';
-import type { MemoryRepository } from './memory-repository';
 import { runBackgroundTask } from './background-task';
+import type { MemoryRepository } from './memory-repository';
+
 export type ConversationMessage = ModelMessage;
 
 export type SessionMemory = {
@@ -10,7 +11,7 @@ export type SessionMemory = {
 };
 
 type EventState = {
-  status: "processing" | "done";
+  status: 'processing' | 'done';
   timestamp: number;
 };
 
@@ -75,7 +76,7 @@ export class MemoryService {
       ...existing,
       { role: 'user', content: userText },
       { role: 'assistant', content: assistantText },
-    ]
+    ];
     const maxMessage = this.maxTurns * 2;
     const nextSession = {
       ...session,
@@ -95,9 +96,9 @@ export class MemoryService {
 
     const existing = this.events.get(eventId);
     if (existing) {
-        return false;
+      return false;
     }
-    this.events.set(eventId, { status: "processing", timestamp: Date.now() });
+    this.events.set(eventId, { status: 'processing', timestamp: Date.now() });
     return true;
   }
 
@@ -105,7 +106,7 @@ export class MemoryService {
     if (!this.events.has(eventId)) {
       return;
     }
-    this.events.set(eventId, { status: "done", timestamp: Date.now() });
+    this.events.set(eventId, { status: 'done', timestamp: Date.now() });
   }
 
   markEventFailed(eventId: string): void {
@@ -137,7 +138,7 @@ export class MemoryService {
       try {
         this.repository?.delete(chatId);
       } catch (error) {
-        logger.warn({ err: error, chatId }, 'failed to delete persisted memory');
+        logger.warn({ err: error, chatId }, '[memory] persisted_delete_failed');
       }
     }, `delete memory for ${chatId}`);
   }
@@ -146,8 +147,7 @@ export class MemoryService {
     try {
       this.repository?.save(chatId, session);
     } catch (error) {
-      logger.warn({ err: error, chatId }, 'failed to persist memory');
+      logger.warn({ err: error, chatId }, '[memory] persisted_save_failed');
     }
   }
-
 }

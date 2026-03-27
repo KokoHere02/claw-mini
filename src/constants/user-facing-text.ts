@@ -1,0 +1,18 @@
+﻿export const USER_FACING_TEXT = {
+  genericFailure: '服务暂时不可用，请稍后重试。',
+  requestTimedOut: '请求处理超时，请重试或缩小问题范围。',
+  requestCancelled: '请求已取消。',
+  emptyReplyFallback: '我暂时无法生成回复，请稍后重试。',
+  unsupportedMessageType: '当前仅支持文本、图片、文件和富文本消息。',
+  emptyMessageContent: '消息内容为空，请重新发送。',
+  conversationReset: '会话历史已重置。',
+  summaryTitle: '当前摘要：',
+  summaryEmpty: '当前摘要为空。',
+  memorySummaryLengthLabel: '摘要长度',
+  memoryRecentMessageCountLabel: '最近消息数',
+  memorySummaryLabel: '摘要',
+  attachmentPromptFallback: '请分析用户提供的附件并给出回答。',
+  modelUnexpectedResultDuringPlanning: '模型服务暂时返回了非预期结果，请稍后重试。',
+  modelUnexpectedResultDuringAnswer: '模型服务暂时返回了非预期结果，当前无法生成最终答复。',
+  modelUnexpectedResultAfterTools: '工具已执行，但模型服务暂时返回了非预期结果，当前无法生成最终答案。',
+} as const;

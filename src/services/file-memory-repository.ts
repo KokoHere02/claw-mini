@@ -1,9 +1,9 @@
-import fs from 'node:fs';
+﻿import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '@/config';
 import logger from '@/utils/logger';
-import type { SessionMemory } from './memory';
 import type { MemoryRepository } from './memory-repository';
+import type { SessionMemory } from './memory';
 
 type PersistedSessionMemory = SessionMemory & {
   chatId: string;
@@ -36,7 +36,7 @@ export class FileMemoryRepository implements MemoryRepository {
         summary: typeof parsed.summary === 'string' ? parsed.summary : '',
       };
     } catch (error) {
-      logger.warn({ err: error, chatId, filePath }, 'failed to load memory file');
+      logger.warn({ err: error, chatId, filePath }, '[memory_repo] load_failed');
       return null;
     }
   }
@@ -57,7 +57,7 @@ export class FileMemoryRepository implements MemoryRepository {
       fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), 'utf8');
       fs.renameSync(tmpPath, filePath);
     } catch (error) {
-      logger.warn({ err: error, chatId, filePath }, 'failed to save memory file');
+      logger.warn({ err: error, chatId, filePath }, '[memory_repo] save_failed');
       try {
         if (fs.existsSync(tmpPath)) fs.rmSync(tmpPath, { force: true });
       } catch {}
@@ -71,7 +71,7 @@ export class FileMemoryRepository implements MemoryRepository {
         fs.rmSync(filePath, { force: true });
       }
     } catch (error) {
-      logger.warn({ err: error, chatId, filePath }, 'failed to delete memory file');
+      logger.warn({ err: error, chatId, filePath }, '[memory_repo] delete_failed');
     }
   }
 

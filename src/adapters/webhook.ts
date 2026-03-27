@@ -1,9 +1,9 @@
-import { serve, ServerType } from '@hono/node-server';
+﻿import { serve, type ServerType } from '@hono/node-server';
 import { Hono } from 'hono';
-import feishuRouter from '@/routes/feishu';
 import { config } from '@/config';
-import type { Adapter } from './types';
 import logger from '@/utils/logger';
+import feishuRouter from '@/routes/feishu';
+import type { Adapter } from './types';
 
 export class WebhookAdapter implements Adapter {
   private server: ServerType | null = null;
@@ -16,20 +16,17 @@ export class WebhookAdapter implements Adapter {
     app.notFound((c) => c.json({ code: 404, msg: 'Not Found' }, 404));
 
     return new Promise((resolve) => {
-      this.server = serve(
-        { fetch: app.fetch, hostname: config.host, port: config.port },
-        (info) => {
-          logger.info(`[webhook] listening on http://${info.address}:${info.port}`);
-          resolve();
-        }
-      );
+      this.server = serve({ fetch: app.fetch, hostname: config.host, port: config.port }, (info) => {
+        logger.info({ address: info.address, port: info.port }, '[webhook] listening');
+        resolve();
+      });
     });
   }
 
   async stop(): Promise<void> {
     return new Promise((resolve, reject) => {
       if (!this.server) return resolve();
-      this.server.close((err) => err ? reject(err) : resolve());
+      this.server.close((err) => (err ? reject(err) : resolve()));
     });
   }
 }

@@ -1,4 +1,4 @@
-import { stepCountIs, streamText, type ModelMessage } from 'ai';
+﻿import { stepCountIs, streamText, type ModelMessage } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { z } from 'zod';
 import { config } from '@/config';
@@ -60,25 +60,6 @@ function buildReadonlyToolCache(
   }
 
   return cache;
-}
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
 }
 
 function stringifyMessageContent(message: ModelMessage): string {
@@ -462,6 +443,7 @@ export async function executeTaskStepWithAgentLoop(
   let parallelToolCalls: TaskStepToolCall[] = [];
   let messages = baseMessages;
   let planningAbortReason: string | undefined;
+  let executionAbortReason: string | undefined;
 
   try {
     const planningAbort = createChildAbortSignal({
@@ -487,15 +469,26 @@ export async function executeTaskStepWithAgentLoop(
           arguments: toolCall.arguments,
         })),
       },
-      '[task-step] planned parallel readonly tools',
+      '[task_step] planned_readonly_tools',
     );
 
     if (plannedToolCalls.length) {
-      const parallelExecution = await withTimeout(
-        executeParallelReadonlyTools(plannedToolCalls, readonlyToolCache, input.signal),
-        config.agent.parallelReadonlyExecutionBudgetMs,
-        `parallel readonly execution for ${input.step.id}`,
-      );
+      const executionAbort = createChildAbortSignal({
+        parentSignal: input.signal,
+        timeoutMs: config.agent.parallelReadonlyExecutionBudgetMs,
+        timeoutReason: `Parallel readonly execution for ${input.step.id} timed out after ${config.agent.parallelReadonlyExecutionBudgetMs}ms`,
+      });
+
+      const parallelExecution = await executeParallelReadonlyTools(
+        plannedToolCalls,
+        readonlyToolCache,
+        executionAbort.signal,
+      ).finally(() => {
+        if (executionAbort.signal.aborted) {
+          executionAbortReason = getAbortReasonMessage(executionAbort.signal);
+        }
+        executionAbort.dispose();
+      });
       parallelToolCalls = parallelExecution.toolCalls;
       messages = [...baseMessages, ...parallelExecution.messages];
       logger.info(
@@ -507,13 +500,13 @@ export async function executeTaskStepWithAgentLoop(
           })),
           cacheHits: parallelExecution.cacheHits,
         },
-        '[task-step] executed parallel readonly tools',
+        '[task_step] executed_readonly_tools',
       );
     }
   } catch (error) {
     const timeoutMessage =
-      planningAbortReason || isAbortError(error) || input.signal?.aborted
-        ? planningAbortReason ?? getAbortReasonMessage(input.signal)
+      planningAbortReason || executionAbortReason || isAbortError(error) || input.signal?.aborted
+        ? executionAbortReason ?? planningAbortReason ?? getAbortReasonMessage(input.signal)
         : undefined;
     logger.warn(
       {
@@ -524,7 +517,7 @@ export async function executeTaskStepWithAgentLoop(
         planningTimeoutMs: config.agent.parallelReadonlyPlanTimeoutMs,
         executionBudgetMs: config.agent.parallelReadonlyExecutionBudgetMs,
       },
-      '[task-step] failed to plan or execute parallel readonly tools',
+      '[task_step] readonly_tools_pipeline_failed',
     );
     messages = baseMessages;
   }

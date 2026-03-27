@@ -1,7 +1,8 @@
-import { stepCountIs, streamText, type ModelMessage } from 'ai';
+﻿import { stepCountIs, streamText, type ModelMessage } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { z } from 'zod';
 import { config } from '@/config';
+import { USER_FACING_TEXT } from '@/constants/user-facing-text';
 import { registry } from './tool-registry';
 import type { ToolDefinition } from './tool-types';
 import { runner } from './tool-runner';
@@ -149,7 +150,7 @@ function shouldReturnDirectToolAnswer(messages: ModelMessage[], tool: ToolDefini
   const text = getMessageText(messages[lastUserIndex]).trim();
   if (!text) return false;
 
-  if (/(先|然后|再|接着|并且|总结|分析|判断|告诉我|说明|为什么|是否|有没有)/.test(text)) {
+  if (/(?:然后|接着|并且|总结|分析|判断|告诉我|说明|为什么|是否|有没有)/.test(text)) {
     return false;
   }
 
@@ -201,7 +202,7 @@ async function inferToolDecision(
     try {
       parsed = parseJsonLikeText(rawText);
     } catch {
-      logger.warn({ text: rawText }, '[agent] tool inference returned non-json');
+      logger.warn({ text: rawText }, '[agent] tool_inference_non_json');
       return null;
     }
 
@@ -229,7 +230,7 @@ async function inferToolDecision(
           : {},
     };
   } catch (error) {
-    logger.warn({ err: error }, '[agent] ai tool inference failed');
+    logger.warn({ err: error }, '[agent] tool_inference_failed');
     return null;
   }
 }
@@ -295,7 +296,7 @@ async function planNextStep(
   if (!hasPostUserAgentContext(messages)) {
     const inferred = await inferToolDecision(messages, signal);
     if (inferred) {
-      logger.info({ decision: inferred }, '[agent] ai tool selection');
+      logger.info({ decision: inferred }, '[agent] tool_inference_selected');
       return inferred;
     }
   }
@@ -309,7 +310,7 @@ async function planNextStep(
   try {
     return normalizeDecision(parseJsonLikeText(text));
   } catch (error) {
-    logger.warn({ text, err: error }, '[agent] failed to parse planner JSON');
+    logger.warn({ text, err: error }, '[agent] planner_parse_failed');
     return null;
   }
 }
@@ -361,12 +362,12 @@ export async function runAgent(
     let decision: AgentDecision | null;
     try {
       decision = await planNextStep(step, workingMessages, signal);
-      logger.info({ decision }, '[agent] planner output');
+      logger.info({ decision }, '[agent] planner_output');
     } catch (error) {
-      logger.error({ err: error, step }, '[agent] failed while planning next step');
-      return '模型服务暂时返回了非预期结果，工具已经执行的话你可以稍后重试，或检查模型网关配置。';
+      logger.error({ err: error, step }, '[agent] planning_failed');
+      return USER_FACING_TEXT.modelUnexpectedResultDuringPlanning;
     }
-    logger.info({ step, decision }, '[agent] planner decision');
+    logger.info({ step, decision }, '[agent] planner_decision');
 
     if (!decision) {
       try {
@@ -375,22 +376,22 @@ export async function runAgent(
           buildAnswerPrompt(getPromptContext(step, workingMessages)),
           signal,
         );
-        logger.info({ step, text: fallback }, '[agent] execution finished without tool plan');
+        logger.info({ step, text: fallback }, '[agent] completed_without_tool_plan');
         return fallback;
       } catch (error) {
-        logger.error({ err: error, step }, '[agent] direct fallback generation failed');
-        return '模型服务暂时返回了非预期结果，无法整理最终答复。';
+        logger.error({ err: error, step }, '[agent] direct_fallback_failed');
+        return USER_FACING_TEXT.modelUnexpectedResultDuringAnswer;
       }
     }
 
     if (decision.action === 'respond') {
-      logger.info({ step, text: decision.answer }, '[agent] execution finished with direct answer');
+      logger.info({ step, text: decision.answer }, '[agent] completed_with_direct_answer');
       return decision.answer;
     }
 
     const toolDefinition = registry.get(decision.tool);
     if (!toolDefinition) {
-      logger.warn({ step, tool: decision.tool }, '[agent] planner selected unknown tool');
+      logger.warn({ step, tool: decision.tool }, '[agent] planner_selected_unknown_tool');
       workingMessages.push({
         role: 'system',
         content: [
@@ -403,13 +404,16 @@ export async function runAgent(
     }
 
     const toolArgs = decision.arguments ?? {};
-    logger.info({ step, tool: toolDefinition.name, arguments: toolArgs }, '[agent] tool selected');
+    logger.info({ step, tool: toolDefinition.name, arguments: toolArgs }, '[agent] tool_selected');
 
     try {
       const toolResult = await runner.run(toolDefinition, toolArgs, { signal });
       const directAnswer = getToolDisplayText(toolResult);
       if (directAnswer && shouldReturnDirectToolAnswer(workingMessages, toolDefinition)) {
-        logger.info({ step, tool: toolDefinition.name, text: directAnswer }, '[agent] execution finished with direct tool answer');
+        logger.info(
+          { step, tool: toolDefinition.name, text: directAnswer },
+          '[agent] completed_with_direct_tool_answer',
+        );
         return directAnswer;
       }
 
@@ -424,10 +428,10 @@ export async function runAgent(
         },
         makeToolContextMessage(toolDefinition.name, toolDefinition.description, toolArgs, toolResult),
       );
-      logger.info({ step, tool: toolDefinition.name, result: toolResult }, '[agent] tool execution finished');
+      logger.info({ step, tool: toolDefinition.name, result: toolResult }, '[agent] tool_execution_completed');
       continue;
     } catch (error) {
-      logger.error({ err: error, step, tool: toolDefinition.name }, '[agent] tool execution failed');
+      logger.error({ err: error, step, tool: toolDefinition.name }, '[agent] tool_execution_failed');
       workingMessages.push(
         {
           role: 'assistant',
@@ -451,10 +455,11 @@ export async function runAgent(
       ),
       signal,
     );
-    logger.warn({ text: fallback, maxSteps }, '[agent] execution stopped at max steps');
+    logger.warn({ text: fallback, maxSteps }, '[agent] stopped_at_max_steps');
     return fallback;
   } catch (error) {
-    logger.error({ err: error, maxSteps }, '[agent] final fallback generation failed');
-    return '工具已经执行，但模型服务返回了非预期结果，最终答案暂时无法生成。';
+    logger.error({ err: error, maxSteps }, '[agent] final_fallback_failed');
+    return USER_FACING_TEXT.modelUnexpectedResultAfterTools;
   }
 }
+

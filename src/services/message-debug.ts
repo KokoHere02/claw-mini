@@ -1,15 +1,20 @@
+﻿import { USER_FACING_TEXT } from '@/constants/user-facing-text';
 import type { MemoryService } from '@/services/memory';
 
 export function formatSummaryDebugText(summary: string): string {
-  return summary.trim() ? `current summary:\n${summary}` : 'current summary is empty.';
+  return summary.trim()
+    ? `${USER_FACING_TEXT.summaryTitle}\n${summary}`
+    : USER_FACING_TEXT.summaryEmpty;
 }
 
 export function formatMemoryDebugText(memoryService: MemoryService, chatId: string): string {
   const session = memoryService.getSession(chatId);
   return [
-    `summary_length: ${session.summary.length}`,
-    `recent_message_count: ${session.recentMessages.length}`,
+    `${USER_FACING_TEXT.memorySummaryLengthLabel}: ${session.summary.length}`,
+    `${USER_FACING_TEXT.memoryRecentMessageCountLabel}: ${session.recentMessages.length}`,
     '',
-    session.summary.trim() ? `summary:\n${session.summary}` : 'summary:\n(empty)',
+    session.summary.trim()
+      ? `${USER_FACING_TEXT.memorySummaryLabel}:\n${session.summary}`
+      : `${USER_FACING_TEXT.memorySummaryLabel}:\n(空)`,
   ].join('\n');
 }

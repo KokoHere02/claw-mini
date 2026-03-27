@@ -1,5 +1,6 @@
-import { randomUUID } from 'node:crypto';
+﻿import { randomUUID } from 'node:crypto';
 import { config } from '@/config';
+import { USER_FACING_TEXT } from '@/constants/user-facing-text';
 import { buildSummaryContextMessage } from '@/agent/dynamic-prompt';
 import { runTaskAgent } from '@/agent/task-agent';
 import type { TaskProgressEvent } from '@/agent/task-types';
@@ -11,7 +12,7 @@ import {
   sendTextMessage,
 } from '@/services/feishu';
 import { MemoryService } from '@/services/memory';
-import { FeishuEventPayload } from '@/types/feishu';
+import type { FeishuEventPayload } from '@/types/feishu';
 import logger from '@/utils/logger';
 import { isChatRateLimited } from './chat-rate-limit';
 import { runBackgroundTask } from './background-task';
@@ -64,14 +65,14 @@ function buildUserFacingErrorMessage(error: unknown): string | null {
   }
 
   if (isTimeoutError(error)) {
-    return 'This request timed out before I could finish. Please try again, or narrow the request.';
+    return USER_FACING_TEXT.requestTimedOut;
   }
 
   if (isAbortError(error)) {
-    return 'This request was cancelled before it finished.';
+    return USER_FACING_TEXT.requestCancelled;
   }
 
-  return 'Service error. The issue has been recorded.';
+  return USER_FACING_TEXT.genericFailure;
 }
 
 function sameConversationSnapshot(
@@ -79,8 +80,8 @@ function sameConversationSnapshot(
   right: { summary: string; recentMessages: unknown[] },
 ): boolean {
   return (
-    left.summary.trim() === right.summary.trim()
-    && JSON.stringify(left.recentMessages) === JSON.stringify(right.recentMessages)
+    left.summary.trim() === right.summary.trim() &&
+    JSON.stringify(left.recentMessages) === JSON.stringify(right.recentMessages)
   );
 }
 
@@ -114,7 +115,7 @@ async function refreshSummaryInBackground(input: {
 
   try {
     if (!isActiveChatRun(chatId, runId)) {
-      logger.info({ chatId, runId }, 'skip stale summary refresh before summarizing');
+      logger.info({ chatId, runId }, '[message] summary_refresh_skipped_stale_before');
       return;
     }
 
@@ -125,7 +126,7 @@ async function refreshSummaryInBackground(input: {
 
     if (!summarizeResult) return;
     if (!isActiveChatRun(chatId, runId)) {
-      logger.info({ chatId, runId }, 'skip stale summary refresh after summarizing');
+      logger.info({ chatId, runId }, '[message] summary_refresh_skipped_stale_after');
       return;
     }
 
@@ -141,7 +142,7 @@ async function refreshSummaryInBackground(input: {
     ) {
       logger.info(
         { chatId, currentRecentMessages: currentSession.recentMessages.length },
-        'skip stale conversation summary refresh',
+        '[message] summary_refresh_skipped_snapshot_mismatch',
       );
       return;
     }
@@ -154,13 +155,10 @@ async function refreshSummaryInBackground(input: {
         summaryLength: summarizeResult.summary.length,
         remainingRecentMessages: summarizeResult.recentMessages.length,
       },
-      'conversation summary refreshed',
+      '[message] summary_refresh_completed',
     );
   } catch (error) {
-    logger.info(
-      { chatId, err: summarizeError(error) },
-      'failed to refresh conversation summary',
-    );
+    logger.warn({ chatId, err: summarizeError(error) }, '[message] summary_refresh_failed');
   }
 }
 
@@ -177,7 +175,7 @@ function logTaskProgress(chatId: string, eventId: string, event: TaskProgressEve
             title: step.title,
           })),
         },
-        'task planned',
+        '[task] planned',
       );
       return;
     case 'step_started':
@@ -190,7 +188,7 @@ function logTaskProgress(chatId: string, eventId: string, event: TaskProgressEve
           total: event.total,
           title: event.title,
         },
-        'task step started',
+        '[task] step_started',
       );
       return;
     case 'step_completed':
@@ -204,7 +202,7 @@ function logTaskProgress(chatId: string, eventId: string, event: TaskProgressEve
           title: event.title,
           resultPreview: event.result.slice(0, 200),
         },
-        'task step completed',
+        '[task] step_completed',
       );
       return;
     case 'step_failed':
@@ -218,7 +216,7 @@ function logTaskProgress(chatId: string, eventId: string, event: TaskProgressEve
           title: event.title,
           error: event.error,
         },
-        'task step failed',
+        '[task] step_failed',
       );
       return;
     case 'step_cancelled':
@@ -232,7 +230,7 @@ function logTaskProgress(chatId: string, eventId: string, event: TaskProgressEve
           title: event.title,
           error: event.error,
         },
-        'task step cancelled',
+        '[task] step_cancelled',
       );
       return;
     case 'step_timed_out':
@@ -246,7 +244,7 @@ function logTaskProgress(chatId: string, eventId: string, event: TaskProgressEve
           title: event.title,
           error: event.error,
         },
-        'task step timed out',
+        '[task] step_timed_out',
       );
       return;
     case 'completed':
@@ -256,7 +254,7 @@ function logTaskProgress(chatId: string, eventId: string, event: TaskProgressEve
           eventId,
           answerPreview: event.answer.slice(0, 200),
         },
-        'task completed',
+        '[task] completed',
       );
       return;
     case 'cancelled':
@@ -266,7 +264,7 @@ function logTaskProgress(chatId: string, eventId: string, event: TaskProgressEve
           eventId,
           error: event.error,
         },
-        'task cancelled',
+        '[task] cancelled',
       );
       return;
     case 'timed_out':
@@ -276,7 +274,7 @@ function logTaskProgress(chatId: string, eventId: string, event: TaskProgressEve
           eventId,
           error: event.error,
         },
-        'task timed out',
+        '[task] timed_out',
       );
       return;
     case 'failed':
@@ -286,7 +284,7 @@ function logTaskProgress(chatId: string, eventId: string, event: TaskProgressEve
           eventId,
           error: event.error,
         },
-        'task failed',
+        '[task] failed',
       );
       return;
   }
@@ -320,33 +318,37 @@ async function handleConversationMessage(input: {
     },
   });
   if (!isActiveChatRun(chatId, runId)) {
-    logger.info({ chatId, eventId, runId }, 'skip stale task result before reply');
+    logger.info({ chatId, eventId, runId }, '[message] task_result_skipped_stale_before_reply');
     memoryService.markEventDone(eventId);
     return;
   }
 
-  const reply = taskResult.answer || 'I could not prepare a reply just now. Please try again.';
+  const reply = taskResult.answer || USER_FACING_TEXT.emptyReplyFallback;
 
   await sendTextMessage(chatId, reply);
   if (!isActiveChatRun(chatId, runId)) {
-    logger.info({ chatId, eventId, runId }, 'skip stale post-send memory write');
+    logger.info({ chatId, eventId, runId }, '[message] memory_write_skipped_stale_after_reply');
     memoryService.markEventDone(eventId);
     return;
   }
 
   memoryService.appendExchange(chatId, contentForMemory, reply);
-  logger.info({ chatId, eventId }, 'reply sent');
+  logger.info({ chatId, eventId }, '[message] reply_sent');
   memoryService.markEventDone(eventId);
 
   const sessionSnapshot = memoryService.getSession(chatId);
-  runBackgroundTask(() => refreshSummaryInBackground({
-    chatId,
-    runId,
-    snapshot: {
-      summary: sessionSnapshot.summary,
-      recentMessages: sessionSnapshot.recentMessages,
-    },
-  }), `refresh summary for ${chatId}`);
+  runBackgroundTask(
+    () =>
+      refreshSummaryInBackground({
+        chatId,
+        runId,
+        snapshot: {
+          summary: sessionSnapshot.summary,
+          recentMessages: sessionSnapshot.recentMessages,
+        },
+      }),
+    `refresh summary for ${chatId}`,
+  );
 }
 
 async function handleMessageError(input: {
@@ -359,34 +361,28 @@ async function handleMessageError(input: {
 
   memoryService.markEventFailed(eventId);
   if (runId && !isActiveChatRun(chatId, runId)) {
-    logger.info({ chatId, eventId, runId, err: summarizeError(error) }, 'skip stale run error handling');
+    logger.info({ chatId, eventId, runId, err: summarizeError(error) }, '[message] error_handling_skipped_stale');
     memoryService.markEventDone(eventId);
     return;
   }
 
   if (isSupersededRunError(error)) {
-    logger.info({ chatId, eventId, runId, err: summarizeError(error) }, 'message handling superseded by newer run');
+    logger.info({ chatId, eventId, runId, err: summarizeError(error) }, '[message] run_superseded');
     memoryService.markEventDone(eventId);
     return;
   }
 
   if (isAbortError(error)) {
-    logger.info({ chatId, eventId, runId, err: summarizeError(error) }, 'message handling aborted');
+    logger.info({ chatId, eventId, runId, err: summarizeError(error) }, '[message] run_aborted');
   }
 
   if (error instanceof UnsupportedAttachmentError) {
-    logger.warn(
-      { chatId, eventId, err: summarizeError(error) },
-      'unsupported attachment',
-    );
+    logger.warn({ chatId, eventId, err: summarizeError(error) }, '[message] unsupported_attachment');
     await sendTextMessage(chatId, error.message).catch(() => {});
     return;
   }
 
-  logger.error(
-    { chatId, eventId, err: summarizeError(error) },
-    'error handling message',
-  );
+  logger.error({ chatId, eventId, err: summarizeError(error) }, '[message] handling_failed');
   const userFacingMessage = buildUserFacingErrorMessage(error);
   if (userFacingMessage) {
     await sendTextMessage(chatId, userFacingMessage).catch(() => {});
@@ -402,13 +398,13 @@ export async function handleMessage(body: FeishuEventPayload): Promise<void> {
 
   const chatId = event.message.chat_id;
   if (isChatRateLimited(chatId)) {
-    logger.warn({ chatId, eventId: header.event_id }, 'chat rate limited');
+    logger.warn({ chatId, eventId: header.event_id }, '[message] chat_rate_limited');
     return;
   }
 
   if (!memoryService.tryStartEvent(header.event_id)) return;
 
-  logger.info({ chatId, eventId: header.event_id }, 'handling message');
+  logger.info({ chatId, eventId: header.event_id }, '[message] handling_started');
   const runId = `${header.event_id}:${randomUUID()}`;
 
   try {
@@ -420,19 +416,19 @@ export async function handleMessage(body: FeishuEventPayload): Promise<void> {
         messageType: event.message.message_type,
         senderType: event.sender?.sender_type,
       },
-      'received message',
+      '[message] received',
     );
     if (!['text', 'post', 'image', 'file'].includes(event.message.message_type)) {
-      logger.info({ chatId, messageType: event.message.message_type }, 'unsupported message type');
-      await sendTextMessage(chatId, 'Currently only text, image, file, and post messages are supported.');
+      logger.info({ chatId, messageType: event.message.message_type }, '[message] unsupported_message_type');
+      await sendTextMessage(chatId, USER_FACING_TEXT.unsupportedMessageType);
       memoryService.markEventDone(header.event_id);
       return;
     }
 
     const parsedContent = extractMessageContent(event.message.message_type, event.message.content);
     if (!parsedContent.text && !parsedContent.imageKeys.length && !parsedContent.files.length) {
-      logger.warn({ chatId, eventId: header.event_id }, 'empty message content');
-      await sendTextMessage(chatId, 'Message content is empty. Please try again.');
+      logger.warn({ chatId, eventId: header.event_id }, '[message] empty_content');
+      await sendTextMessage(chatId, USER_FACING_TEXT.emptyMessageContent);
       memoryService.markEventDone(header.event_id);
       return;
     }
@@ -444,8 +440,8 @@ export async function handleMessage(body: FeishuEventPayload): Promise<void> {
 
     if (isResetCommand(contentForMemory)) {
       memoryService.resetConversation(chatId);
-      logger.info({ chatId }, 'conversation reset');
-      await sendTextMessage(chatId, 'Conversation history has been reset.');
+      logger.info({ chatId }, '[message] conversation_reset');
+      await sendTextMessage(chatId, USER_FACING_TEXT.conversationReset);
       memoryService.markEventDone(header.event_id);
       return;
     }
@@ -461,6 +457,7 @@ export async function handleMessage(body: FeishuEventPayload): Promise<void> {
       memoryService.markEventDone(header.event_id);
       return;
     }
+
     await handleConversationMessage({
       chatId,
       eventId: header.event_id,

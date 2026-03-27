@@ -1,5 +1,6 @@
-import type { ModelMessage } from 'ai';
+﻿import type { ModelMessage } from 'ai';
 import path from 'node:path';
+import { USER_FACING_TEXT } from '@/constants/user-facing-text';
 import { downloadMessageFile, downloadMessageImage } from '@/services/feishu';
 import { extractDocText, extractDocxText } from './office-parser';
 import type { ParsedMessageContent } from './message-content';
@@ -71,6 +72,15 @@ function isTextLikeFile(mediaType?: string, filename?: string): boolean {
   );
 }
 
+function formatAttachmentLabel(fileName: string | undefined, fallback: string): string {
+  const value = fileName?.trim();
+  return value || fallback;
+}
+
+function unsupportedAttachmentMessage(fileName: string | undefined, detail: string): string {
+  return `暂不支持文件“${formatAttachmentLabel(fileName, '未知文件')}”。${detail}`;
+}
+
 export async function buildUserMessage(
   messageType: string,
   messageId: string,
@@ -86,7 +96,7 @@ export async function buildUserMessage(
     };
   }
 
-  const promptText = content.text || 'Please analyze the user provided attachment and answer accordingly.';
+  const promptText = content.text || USER_FACING_TEXT.attachmentPromptFallback;
   const parts: Array<
     | { type: 'text'; text: string }
     | { type: 'image'; image: Uint8Array; mediaType?: string }
@@ -115,13 +125,16 @@ export async function buildUserMessage(
           text = await extractDocText(downloaded.data, file.fileName || 'document.doc');
         } catch (error) {
           throw new UnsupportedAttachmentError(
-            `Unsupported file type: ${file.fileName || 'doc file'}. Failed to extract readable text from the .doc file: ${error instanceof Error ? error.message : String(error)}`,
+            unsupportedAttachmentMessage(
+              file.fileName,
+              `无法从 .doc 提取可读文本：${error instanceof Error ? error.message : String(error)}`,
+            ),
           );
         }
 
         if (!text) {
           throw new UnsupportedAttachmentError(
-            `Unsupported file type: ${file.fileName || 'doc file'}. The .doc file was parsed but no readable text was extracted.`,
+            unsupportedAttachmentMessage(file.fileName, '已解析 .doc，但未提取到可读文本。'),
           );
         }
 
@@ -137,13 +150,16 @@ export async function buildUserMessage(
           text = await extractDocxText(downloaded.data, file.fileName || 'document.docx');
         } catch (error) {
           throw new UnsupportedAttachmentError(
-            `Unsupported file type: ${file.fileName || 'docx file'}. Failed to extract readable text from the .docx file: ${error instanceof Error ? error.message : String(error)}`,
+            unsupportedAttachmentMessage(
+              file.fileName,
+              `无法从 .docx 提取可读文本：${error instanceof Error ? error.message : String(error)}`,
+            ),
           );
         }
 
         if (!text) {
           throw new UnsupportedAttachmentError(
-            `Unsupported file type: ${file.fileName || 'docx file'}. The .docx file was parsed but no readable text was extracted.`,
+            unsupportedAttachmentMessage(file.fileName, '已解析 .docx，但未提取到可读文本。'),
           );
         }
 
@@ -155,7 +171,7 @@ export async function buildUserMessage(
 
       if (isOfficeDocument(mediaType, file.fileName)) {
         throw new UnsupportedAttachmentError(
-          `Unsupported file type: ${file.fileName || 'office document'}. Direct parsing for Office documents is not implemented yet.`,
+          unsupportedAttachmentMessage(file.fileName, '暂未实现该 Office 文档类型的直接解析。'),
         );
       }
 
@@ -177,7 +193,10 @@ export async function buildUserMessage(
       }
 
       throw new UnsupportedAttachmentError(
-        `Unsupported file type: ${file.fileName || mediaType}. Currently only text-like files and PDF are supported.`,
+        unsupportedAttachmentMessage(
+          file.fileName || mediaType,
+          '当前仅支持文本类文件和 PDF。',
+        ),
       );
     }),
   );
