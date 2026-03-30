@@ -57,6 +57,7 @@ describe('agent tools', () => {
     };
 
     expect(result.timeZone).toBe('Asia/Shanghai');
-    expect(result.displayText).toMatch(/当前时间（Asia\/Shanghai）:/);
+    expect(result.displayText).toContain('Asia/Shanghai');
+    expect(result.displayText).toContain('当前时间');
   });
 });

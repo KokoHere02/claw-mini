@@ -5,8 +5,8 @@
   "main": "index.js",
   "scripts": {
     "dev": "scripts\\tsx-utf8.cmd watch src/index.ts",
-    "test": "scripts\\tsx-utf8.cmd src/tests/agent-tools.ts",
-    "test:task-agent": "scripts\\tsx-utf8.cmd src/tests/task-agent.ts",
+    "test": "scripts\\tsx-utf8.cmd scripts/manual-agent-tools.ts",
+    "test:task-agent": "scripts\\tsx-utf8.cmd scripts/manual-task-agent.ts",
     "test:unit": "vitest run",
     "test:unit:watch": "vitest"
   },

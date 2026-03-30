@@ -4,6 +4,14 @@ import type { TaskPlan, TaskProgressEvent } from '@/agent/task-types';
 import { runTaskOrchestration } from '@/agent/task-orchestrator';
 import { buildTaskPlan } from '@/agent/task-planner';
 
+vi.mock('@/config', () => ({
+  config: {
+    agent: {
+      stepTimeoutMs: 20,
+    },
+  },
+}));
+
 vi.mock('@/agent/task-planner', () => ({
   buildTaskPlan: vi.fn(),
 }));
@@ -111,5 +119,101 @@ describe('runTaskOrchestration', () => {
         synthesizeAnswer: vi.fn(async () => 'irrelevant'),
       }),
     ).rejects.toThrow('Task plan contains unresolved step dependencies.');
+  });
+
+  it('should mark timed_out when step exceeds step timeout', async () => {
+    const plan: TaskPlan = {
+      goal: 'timeout flow',
+      steps: [
+        {
+          id: 'step_1',
+          title: 'slow step',
+          goal: 'wait forever',
+          expectedOutput: 'none',
+        },
+      ],
+    };
+    vi.mocked(buildTaskPlan).mockResolvedValue(plan);
+
+    const events: TaskProgressEvent[] = [];
+    await expect(
+      runTaskOrchestration({
+        messages: makeMessages('timeout test'),
+        executeStep: vi.fn(({ signal }) => (
+          new Promise((_resolve, reject) => {
+            if (signal?.aborted) {
+              reject(signal.reason ?? new Error('aborted'));
+              return;
+            }
+            signal?.addEventListener(
+              'abort',
+              () => reject(signal.reason ?? new Error('aborted')),
+              { once: true },
+            );
+          })
+        )),
+        synthesizeAnswer: vi.fn(async () => 'irrelevant'),
+        onProgress(event) {
+          events.push(event);
+        },
+      }),
+    ).rejects.toThrow(/timed out/i);
+
+    expect(events.map((event) => event.type)).toEqual([
+      'planned',
+      'step_started',
+      'step_timed_out',
+      'timed_out',
+    ]);
+  });
+
+  it('should mark cancelled when parent signal aborts', async () => {
+    const plan: TaskPlan = {
+      goal: 'cancel flow',
+      steps: [
+        {
+          id: 'step_1',
+          title: 'cancelled step',
+          goal: 'stop by parent abort',
+          expectedOutput: 'none',
+        },
+      ],
+    };
+    vi.mocked(buildTaskPlan).mockResolvedValue(plan);
+
+    const controller = new AbortController();
+    const events: TaskProgressEvent[] = [];
+
+    const task = runTaskOrchestration({
+      messages: makeMessages('cancel test'),
+      signal: controller.signal,
+      executeStep: vi.fn(({ signal }) => (
+        new Promise((_resolve, reject) => {
+          if (signal?.aborted) {
+            reject(signal.reason ?? new Error('aborted'));
+            return;
+          }
+          signal?.addEventListener(
+            'abort',
+            () => reject(signal.reason ?? new Error('aborted')),
+            { once: true },
+          );
+        })
+      )),
+      synthesizeAnswer: vi.fn(async () => 'irrelevant'),
+      onProgress(event) {
+        events.push(event);
+      },
+    });
+
+    controller.abort('manual cancel');
+
+    await expect(task).rejects.toThrow(/manual cancel/i);
+    expect(events.map((event) => event.type)).toEqual([
+      'planned',
+      'step_started',
+      'step_cancelled',
+      'cancelled',
+    ]);
   });
 });
