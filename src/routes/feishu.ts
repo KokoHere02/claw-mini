@@ -6,7 +6,7 @@ import {
   verifyEncryptKey,
   verifyWebhookToken,
 } from '@/services/feishu';
-import { handleMessage } from '@/services/handle-message';
+import { handleMessage } from '@/services/message-handler';
 import logger from '@/utils/logger';
 
 const router = new Hono();

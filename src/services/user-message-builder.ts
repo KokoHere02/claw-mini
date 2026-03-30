@@ -3,7 +3,7 @@ import path from 'node:path';
 import { USER_FACING_TEXT } from '@/constants/user-facing-text';
 import { downloadMessageFile, downloadMessageImage } from '@/services/feishu';
 import { extractDocText, extractDocxText } from './office-parser';
-import type { ParsedMessageContent } from './message-content';
+import type { ParsedMessageContent } from './message-content-parser';
 
 export class UnsupportedAttachmentError extends Error {
   constructor(message: string) {

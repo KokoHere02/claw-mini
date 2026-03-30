@@ -2,7 +2,7 @@
 import * as protobuf from 'protobufjs';
 import { config } from '@/config';
 import { isEventPayload } from '@/services/feishu';
-import { handleMessage } from '@/services/handle-message';
+import { handleMessage } from '@/services/message-handler';
 import logger from '@/utils/logger';
 import type { Adapter } from './types';
 

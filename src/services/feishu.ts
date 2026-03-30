@@ -113,6 +113,11 @@ export function isMemoryDebugCommand(content: string): boolean {
   return value === '#memory' || value === '/memory';
 }
 
+export function isMetricsDebugCommand(content: string): boolean {
+  const value = content.trim().toLowerCase();
+  return value === '#metrics' || value === '/metrics';
+}
+
 export async function downloadMessageImage(
   messageId: string,
   imageKey: string,

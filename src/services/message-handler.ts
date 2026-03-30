@@ -6,6 +6,7 @@ import { runTaskAgent } from '@/agent/task-agent';
 import type { TaskProgressEvent } from '@/agent/task-types';
 import { isAbortError } from '@/utils/abort';
 import {
+  isMetricsDebugCommand,
   isMemoryDebugCommand,
   isResetCommand,
   isSummaryDebugCommand,
@@ -17,9 +18,14 @@ import logger from '@/utils/logger';
 import { isChatRateLimited } from './chat-rate-limit';
 import { runBackgroundTask } from './background-task';
 import { FileMemoryRepository } from './file-memory-repository';
-import { extractMessageContent } from './message-content';
-import { formatMemoryDebugText, formatSummaryDebugText } from './message-debug';
+import { extractMessageContent } from './message-content-parser';
+import {
+  formatMemoryDebugText,
+  formatRuntimeMetricsDebugText,
+  formatSummaryDebugText,
+} from './message-debug-formatter';
 import { maybeSummarizeSession } from './memory-summarizer';
+import { runtimeMetrics } from './runtime-metrics';
 import { buildUserMessage, UnsupportedAttachmentError } from './user-message-builder';
 
 const memoryService = new MemoryService(
@@ -165,6 +171,7 @@ async function refreshSummaryInBackground(input: {
 function logTaskProgress(chatId: string, eventId: string, event: TaskProgressEvent): void {
   switch (event.type) {
     case 'planned':
+      runtimeMetrics.increment('task_planned_total');
       logger.info(
         {
           chatId,
@@ -179,6 +186,7 @@ function logTaskProgress(chatId: string, eventId: string, event: TaskProgressEve
       );
       return;
     case 'step_started':
+      runtimeMetrics.increment('task_step_started_total');
       logger.info(
         {
           chatId,
@@ -192,6 +200,7 @@ function logTaskProgress(chatId: string, eventId: string, event: TaskProgressEve
       );
       return;
     case 'step_completed':
+      runtimeMetrics.increment('task_step_completed_total');
       logger.info(
         {
           chatId,
@@ -206,6 +215,7 @@ function logTaskProgress(chatId: string, eventId: string, event: TaskProgressEve
       );
       return;
     case 'step_failed':
+      runtimeMetrics.increment('task_step_failed_total');
       logger.warn(
         {
           chatId,
@@ -220,6 +230,7 @@ function logTaskProgress(chatId: string, eventId: string, event: TaskProgressEve
       );
       return;
     case 'step_cancelled':
+      runtimeMetrics.increment('task_step_cancelled_total');
       logger.warn(
         {
           chatId,
@@ -234,6 +245,7 @@ function logTaskProgress(chatId: string, eventId: string, event: TaskProgressEve
       );
       return;
     case 'step_timed_out':
+      runtimeMetrics.increment('task_step_timed_out_total');
       logger.warn(
         {
           chatId,
@@ -248,6 +260,8 @@ function logTaskProgress(chatId: string, eventId: string, event: TaskProgressEve
       );
       return;
     case 'completed':
+      runtimeMetrics.increment('task_completed_total');
+      runtimeMetrics.recordTaskTerminalStatus('completed');
       logger.info(
         {
           chatId,
@@ -258,6 +272,8 @@ function logTaskProgress(chatId: string, eventId: string, event: TaskProgressEve
       );
       return;
     case 'cancelled':
+      runtimeMetrics.increment('task_cancelled_total');
+      runtimeMetrics.recordTaskTerminalStatus('cancelled');
       logger.warn(
         {
           chatId,
@@ -268,6 +284,8 @@ function logTaskProgress(chatId: string, eventId: string, event: TaskProgressEve
       );
       return;
     case 'timed_out':
+      runtimeMetrics.increment('task_timed_out_total');
+      runtimeMetrics.recordTaskTerminalStatus('timed_out');
       logger.warn(
         {
           chatId,
@@ -278,6 +296,8 @@ function logTaskProgress(chatId: string, eventId: string, event: TaskProgressEve
       );
       return;
     case 'failed':
+      runtimeMetrics.increment('task_failed_total');
+      runtimeMetrics.recordTaskTerminalStatus('failed');
       logger.warn(
         {
           chatId,
@@ -294,12 +314,13 @@ async function handleConversationMessage(input: {
   chatId: string;
   eventId: string;
   runId: string;
+  startedAt: number;
   messageId: string;
   messageType: string;
   parsedContent: ReturnType<typeof extractMessageContent>;
   contentForMemory: string;
 }): Promise<void> {
-  const { chatId, eventId, runId, messageId, messageType, parsedContent, contentForMemory } = input;
+  const { chatId, eventId, runId, startedAt, messageId, messageType, parsedContent, contentForMemory } = input;
   const taskAbortController = startChatRun(chatId, runId);
   const summary = memoryService.getSummary(chatId);
   const summaryMessage = buildSummaryContextMessage(summary);
@@ -318,6 +339,7 @@ async function handleConversationMessage(input: {
     },
   });
   if (!isActiveChatRun(chatId, runId)) {
+    runtimeMetrics.increment('message_stale_task_result_skipped_total');
     logger.info({ chatId, eventId, runId }, '[message] task_result_skipped_stale_before_reply');
     memoryService.markEventDone(eventId);
     return;
@@ -327,12 +349,15 @@ async function handleConversationMessage(input: {
 
   await sendTextMessage(chatId, reply);
   if (!isActiveChatRun(chatId, runId)) {
+    runtimeMetrics.increment('message_stale_post_send_skipped_total');
     logger.info({ chatId, eventId, runId }, '[message] memory_write_skipped_stale_after_reply');
     memoryService.markEventDone(eventId);
     return;
   }
 
   memoryService.appendExchange(chatId, contentForMemory, reply);
+  runtimeMetrics.increment('message_reply_sent_total');
+  runtimeMetrics.observeDurationMs('message_reply_latency_ms', Date.now() - startedAt);
   logger.info({ chatId, eventId }, '[message] reply_sent');
   memoryService.markEventDone(eventId);
 
@@ -361,27 +386,36 @@ async function handleMessageError(input: {
 
   memoryService.markEventFailed(eventId);
   if (runId && !isActiveChatRun(chatId, runId)) {
+    runtimeMetrics.increment('message_error_stale_skipped_total');
     logger.info({ chatId, eventId, runId, err: summarizeError(error) }, '[message] error_handling_skipped_stale');
     memoryService.markEventDone(eventId);
     return;
   }
 
   if (isSupersededRunError(error)) {
+    runtimeMetrics.increment('message_run_superseded_total');
     logger.info({ chatId, eventId, runId, err: summarizeError(error) }, '[message] run_superseded');
     memoryService.markEventDone(eventId);
     return;
   }
 
   if (isAbortError(error)) {
+    runtimeMetrics.increment('message_run_aborted_total');
     logger.info({ chatId, eventId, runId, err: summarizeError(error) }, '[message] run_aborted');
   }
 
   if (error instanceof UnsupportedAttachmentError) {
+    runtimeMetrics.increment('message_unsupported_attachment_total');
     logger.warn({ chatId, eventId, err: summarizeError(error) }, '[message] unsupported_attachment');
     await sendTextMessage(chatId, error.message).catch(() => {});
     return;
   }
 
+  if (isTimeoutError(error)) {
+    runtimeMetrics.increment('message_timeout_total');
+  } else {
+    runtimeMetrics.increment('message_failure_total');
+  }
   logger.error({ chatId, eventId, err: summarizeError(error) }, '[message] handling_failed');
   const userFacingMessage = buildUserFacingErrorMessage(error);
   if (userFacingMessage) {
@@ -392,18 +426,21 @@ async function handleMessageError(input: {
 
 export async function handleMessage(body: FeishuEventPayload): Promise<void> {
   const { event, header } = body;
+  const startedAt = Date.now();
 
   if (header.event_type !== 'im.message.receive_v1') return;
   if (event.sender?.sender_type === 'app') return;
 
   const chatId = event.message.chat_id;
   if (isChatRateLimited(chatId)) {
+    runtimeMetrics.increment('message_rate_limited_total');
     logger.warn({ chatId, eventId: header.event_id }, '[message] chat_rate_limited');
     return;
   }
 
   if (!memoryService.tryStartEvent(header.event_id)) return;
 
+  runtimeMetrics.increment('message_received_total');
   logger.info({ chatId, eventId: header.event_id }, '[message] handling_started');
   const runId = `${header.event_id}:${randomUUID()}`;
 
@@ -419,6 +456,7 @@ export async function handleMessage(body: FeishuEventPayload): Promise<void> {
       '[message] received',
     );
     if (!['text', 'post', 'image', 'file'].includes(event.message.message_type)) {
+      runtimeMetrics.increment('message_unsupported_type_total');
       logger.info({ chatId, messageType: event.message.message_type }, '[message] unsupported_message_type');
       await sendTextMessage(chatId, USER_FACING_TEXT.unsupportedMessageType);
       memoryService.markEventDone(header.event_id);
@@ -427,6 +465,7 @@ export async function handleMessage(body: FeishuEventPayload): Promise<void> {
 
     const parsedContent = extractMessageContent(event.message.message_type, event.message.content);
     if (!parsedContent.text && !parsedContent.imageKeys.length && !parsedContent.files.length) {
+      runtimeMetrics.increment('message_empty_content_total');
       logger.warn({ chatId, eventId: header.event_id }, '[message] empty_content');
       await sendTextMessage(chatId, USER_FACING_TEXT.emptyMessageContent);
       memoryService.markEventDone(header.event_id);
@@ -439,6 +478,7 @@ export async function handleMessage(body: FeishuEventPayload): Promise<void> {
       '[image]';
 
     if (isResetCommand(contentForMemory)) {
+      runtimeMetrics.increment('message_reset_command_total');
       memoryService.resetConversation(chatId);
       logger.info({ chatId }, '[message] conversation_reset');
       await sendTextMessage(chatId, USER_FACING_TEXT.conversationReset);
@@ -447,13 +487,22 @@ export async function handleMessage(body: FeishuEventPayload): Promise<void> {
     }
 
     if (isSummaryDebugCommand(contentForMemory)) {
+      runtimeMetrics.increment('message_summary_debug_command_total');
       await sendTextMessage(chatId, formatSummaryDebugText(memoryService.getSummary(chatId)));
       memoryService.markEventDone(header.event_id);
       return;
     }
 
     if (isMemoryDebugCommand(contentForMemory)) {
+      runtimeMetrics.increment('message_memory_debug_command_total');
       await sendTextMessage(chatId, formatMemoryDebugText(memoryService, chatId));
+      memoryService.markEventDone(header.event_id);
+      return;
+    }
+
+    if (isMetricsDebugCommand(contentForMemory)) {
+      runtimeMetrics.increment('message_metrics_debug_command_total');
+      await sendTextMessage(chatId, formatRuntimeMetricsDebugText());
       memoryService.markEventDone(header.event_id);
       return;
     }
@@ -462,6 +511,7 @@ export async function handleMessage(body: FeishuEventPayload): Promise<void> {
       chatId,
       eventId: header.event_id,
       runId,
+      startedAt,
       messageId: event.message.message_id,
       messageType: event.message.message_type,
       parsedContent,
@@ -474,5 +524,7 @@ export async function handleMessage(body: FeishuEventPayload): Promise<void> {
       runId,
       error,
     });
+  } finally {
+    runtimeMetrics.observeDurationMs('message_end_to_end_latency_ms', Date.now() - startedAt);
   }
 }

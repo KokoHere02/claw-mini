@@ -4,6 +4,7 @@ import type { Adapter } from '@/adapters/types';
 import { WebhookAdapter } from '@/adapters/webhook';
 import { runBackgroundTask } from '@/services/background-task';
 import { cleanupExpiredMemoryFiles } from '@/services/memory-cleaner';
+import { emitStartupRuntimeReport, scheduleDailyRuntimeReport } from '@/services/runtime-reporter';
 import logger from '@/utils/logger';
 
 const adapters: Record<string, () => Adapter> = {
@@ -26,5 +27,8 @@ runBackgroundTask(() => {
     '[app] startup_memory_cleanup_completed',
   );
 }, 'startup memory cleanup');
+
+emitStartupRuntimeReport();
+scheduleDailyRuntimeReport();
 
 factory().start();

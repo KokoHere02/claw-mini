@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { config } from '@/config';
 import { createChildAbortSignal, getAbortReasonMessage, isAbortError } from '@/utils/abort';
 import logger from '@/utils/logger';
+import { runtimeMetrics } from '@/services/runtime-metrics';
 import { runAgent } from './index';
 import { registry } from './tool-registry';
 import { runner } from './tool-runner';
@@ -275,6 +276,9 @@ async function planParallelReadonlyTools(
     prompt,
     input.signal,
   );
+  if (!rawText.trim()) {
+    return [];
+  }
 
   const parsed = toolCallSchema.parse(parseJsonLikeText(rawText));
   const dedupedToolCalls: PlannedReadonlyToolCall[] = [];
@@ -338,6 +342,7 @@ function makeToolErrorMessage(toolName: string, error: unknown): ModelMessage {
 async function executeParallelReadonlyTools(
   toolCalls: PlannedReadonlyToolCall[],
   cache: Map<string, ReadonlyToolCacheEntry>,
+  stepId: string,
   signal?: AbortSignal,
 ): Promise<{
   messages: ModelMessage[];
@@ -363,9 +368,18 @@ async function executeParallelReadonlyTools(
         };
       }
 
-      const result = await runner.run(toolDefinition, toolCall.arguments, {
-        signal,
-      });
+      const startedAt = Date.now();
+      runtimeMetrics.increment('readonly_tool_call_total');
+      runtimeMetrics.increment(`readonly_tool_call_total:${toolDefinition.name}`);
+      runtimeMetrics.increment(`readonly_tool_call_total:${stepId}:${toolDefinition.name}`);
+
+      const result = await runner.run(toolDefinition, toolCall.arguments, { signal });
+      const durationMs = Date.now() - startedAt;
+      runtimeMetrics.observeDurationMs('readonly_tool_call_duration_ms', durationMs);
+      runtimeMetrics.observeDurationMs(`readonly_tool_call_duration_ms:${toolDefinition.name}`, durationMs);
+      runtimeMetrics.observeDurationMs(`readonly_tool_call_duration_ms:${stepId}:${toolDefinition.name}`, durationMs);
+      runtimeMetrics.increment(`readonly_tool_call_success_total:${toolDefinition.name}`);
+      runtimeMetrics.increment(`readonly_tool_call_success_total:${stepId}:${toolDefinition.name}`);
       cache.set(cacheKey, {
         result,
         sourceStepId: '__current_step__',
@@ -400,6 +414,9 @@ async function executeParallelReadonlyTools(
     if (execution.status === 'fulfilled') {
       if (execution.value.cacheHit) {
         cacheHits += 1;
+        runtimeMetrics.increment('readonly_tool_cache_hit_total');
+        runtimeMetrics.increment(`readonly_tool_cache_hit_total:${execution.value.toolDefinition.name}`);
+        runtimeMetrics.increment(`readonly_tool_cache_hit_total:${stepId}:${execution.value.toolDefinition.name}`);
       }
 
       messages.push(
@@ -420,6 +437,9 @@ async function executeParallelReadonlyTools(
     }
 
     messages.push(makeToolErrorMessage(planned.tool, execution.reason));
+    runtimeMetrics.increment('readonly_tool_call_failed_total');
+    runtimeMetrics.increment(`readonly_tool_call_failed_total:${planned.tool}`);
+    runtimeMetrics.increment(`readonly_tool_call_failed_total:${stepId}:${planned.tool}`);
     executedToolCalls.push({
       tool: planned.tool,
       arguments: planned.arguments,
@@ -452,15 +472,47 @@ export async function executeTaskStepWithAgentLoop(
       timeoutReason: `Parallel readonly planning for ${input.step.id} timed out after ${config.agent.parallelReadonlyPlanTimeoutMs}ms`,
     });
 
-    const plannedToolCalls = await planParallelReadonlyTools({
-      ...input,
-      signal: planningAbort.signal,
-    }).finally(() => {
+    let plannedToolCalls: PlannedReadonlyToolCall[] = [];
+    try {
+      plannedToolCalls = await planParallelReadonlyTools({
+        ...input,
+        signal: planningAbort.signal,
+      });
+    } catch (error) {
+      const isPlanningAbort = planningAbort.signal.aborted || isAbortError(error);
+      const planningReason = getAbortReasonMessage(planningAbort.signal);
+      const planningTimedOut = /\btimed out after \d+ms\b/i.test(planningReason);
+      const isEmptyJson = error instanceof Error && error.message === 'JSON text is empty';
+
+      if (isPlanningAbort || isEmptyJson) {
+        planningAbortReason = planningReason;
+        if (planningTimedOut) {
+          runtimeMetrics.increment('readonly_plan_timeout_total');
+        } else if (isPlanningAbort) {
+          runtimeMetrics.increment('readonly_plan_aborted_total');
+        } else {
+          runtimeMetrics.increment('readonly_plan_empty_output_total');
+        }
+        logger.info(
+          {
+            stepId: input.step.id,
+            abortReason: planningReason || undefined,
+            timedOut: planningTimedOut,
+            emptyOutput: isEmptyJson,
+            planningTimeoutMs: config.agent.parallelReadonlyPlanTimeoutMs,
+          },
+          '[task_step] readonly_plan_fallback',
+        );
+      } else {
+        throw error;
+      }
+    } finally {
       if (planningAbort.signal.aborted) {
         planningAbortReason = getAbortReasonMessage(planningAbort.signal);
       }
       planningAbort.dispose();
-    });
+    }
+
     logger.info(
       {
         stepId: input.step.id,
@@ -471,6 +523,29 @@ export async function executeTaskStepWithAgentLoop(
       },
       '[task_step] planned_readonly_tools',
     );
+    runtimeMetrics.increment('readonly_plan_total');
+    if (plannedToolCalls.length === 0) {
+      runtimeMetrics.increment('readonly_plan_empty_total');
+      logger.info(
+        {
+          stepId: input.step.id,
+          plannedReadonlyToolCount: 0,
+          maxParallelReadonlyTools: config.agent.maxParallelReadonlyTools,
+        },
+        '[task_step] readonly_plan_miss',
+      );
+    } else {
+      runtimeMetrics.increment('readonly_plan_non_empty_total');
+      logger.info(
+        {
+          stepId: input.step.id,
+          plannedReadonlyToolCount: plannedToolCalls.length,
+          maxParallelReadonlyTools: config.agent.maxParallelReadonlyTools,
+          plannedTools: plannedToolCalls.map((toolCall) => toolCall.tool),
+        },
+        '[task_step] readonly_plan_hit',
+      );
+    }
 
     if (plannedToolCalls.length) {
       const executionAbort = createChildAbortSignal({
@@ -482,6 +557,7 @@ export async function executeTaskStepWithAgentLoop(
       const parallelExecution = await executeParallelReadonlyTools(
         plannedToolCalls,
         readonlyToolCache,
+        input.step.id,
         executionAbort.signal,
       ).finally(() => {
         if (executionAbort.signal.aborted) {
@@ -491,6 +567,9 @@ export async function executeTaskStepWithAgentLoop(
       });
       parallelToolCalls = parallelExecution.toolCalls;
       messages = [...baseMessages, ...parallelExecution.messages];
+      runtimeMetrics.increment('readonly_execution_total');
+      runtimeMetrics.increment('readonly_execution_tools_total', parallelToolCalls.length);
+      runtimeMetrics.increment('readonly_execution_cache_hit_total', parallelExecution.cacheHits);
       logger.info(
         {
           stepId: input.step.id,
@@ -508,6 +587,14 @@ export async function executeTaskStepWithAgentLoop(
       planningAbortReason || executionAbortReason || isAbortError(error) || input.signal?.aborted
         ? executionAbortReason ?? planningAbortReason ?? getAbortReasonMessage(input.signal)
         : undefined;
+    runtimeMetrics.increment('readonly_pipeline_failed_total');
+    if (timeoutMessage && /\btimed out after \d+ms\b/i.test(timeoutMessage)) {
+      runtimeMetrics.increment('readonly_execution_timed_out_total');
+    } else if (timeoutMessage || isAbortError(error) || input.signal?.aborted) {
+      runtimeMetrics.increment('readonly_execution_aborted_total');
+    } else {
+      runtimeMetrics.increment('readonly_execution_failed_total');
+    }
     logger.warn(
       {
         stepId: input.step.id,
